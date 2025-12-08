@@ -1,0 +1,54 @@
+#!/usr/bin/env ruby
+# SPDX-License-Identifier: MIT
+
+# This script takes png files in './input' and gives them sequential names of the 
+# form img-nnnn.webp in a date-based directory that will top out at around 150
+# files each.  Imagemagick does the conversion at 75% quality
+
+
+require 'date'
+require 'fileutils'
+
+def find_next_image_dir_and_number(base_dir = '.')
+  today = Date.today
+  year = today.year.to_s
+  month = today.strftime('%m')  # Already zero-padded
+
+  suffix = 1
+  loop do
+    dir_suffix = format('%02d', suffix)
+    dir_name = File.join(base_dir, "#{year}-#{month}-#{dir_suffix}")
+
+    if !Dir.exist?(dir_name)
+      FileUtils.mkdir_p(dir_name)
+      return [dir_name, 1]
+    end
+
+    # Get all img-*.webp files
+    files = Dir.glob(File.join(dir_name, 'img-*.webp'))
+
+    if files.size >= 150
+      suffix += 1
+      next
+    end
+
+    next_num = files.size + 1
+    return [dir_name, next_num]
+  end
+end
+
+
+def main()
+  base, num = find_next_image_dir_and_number
+  Dir.glob(File.join('input', '*.png')).sort.each do |src|
+    new_fn = File.join(base, format("img-%04d.webp", num))
+    puts "#{src} => #{new_fn}"
+    unless system("magick #{src} -quality 75 #{new_fn}")
+      $stderr.puts "imagemagick failed with status #{$?.exitstatus}!"
+      return
+    end
+    num += 1
+  end
+end
+
+main if __FILE__ == $0
