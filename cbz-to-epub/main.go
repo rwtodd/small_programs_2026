@@ -30,14 +30,15 @@ func main() {
 	title := flag.String("title", "My eBook", "EPUB title")
 	publisher := flag.String("publisher", "Unknown", "EPUB publisher")
 	year := flag.Int("year", 1977, "Publication year")
-	inputFile := flag.String("input", "", "Input archive filename (e.g., images.zip)")
+	quality := flag.Int("quality", 80, "Webp conversion quality")
 	baseName := flag.String("imgbase", "page", "Base name for images inside EPUB")
 	flag.Parse()
 
-	if *inputFile == "" {
-		log.Fatal("Usage: program -input <file> -title <title> -base <basename> ...")
+	if flag.NArg() != 1 {
+		flag.Usage()
+		log.Fatalln("Must give an input file (.cbr/.cbz)!")
 	}
-
+	inputFile := flag.Args()[0]
 	tempDir := "out_tmp"
 
 	// 2. Prepare temp directory
@@ -47,8 +48,7 @@ func main() {
 	}
 
 	// 3. Extract archive
-	fmt.Printf("Extracting %s...\n", *inputFile)
-	cmd7z := exec.Command("7zz", "e", "-o"+tempDir, *inputFile)
+	cmd7z := exec.Command("7zz", "e", "-o"+tempDir, inputFile)
 	if err := cmd7z.Run(); err != nil {
 		log.Fatalf("7zz failed: %v", err)
 	}
@@ -81,7 +81,7 @@ func main() {
 			semaphore <- struct{}{}        // Acquire
 			defer func() { <-semaphore }() // Release
 
-			results[index] = processImage(index, filePath)
+			results[index] = processImage(index, *quality, filePath)
 		}(i, path)
 	}
 	wg.Wait()
@@ -108,14 +108,13 @@ func main() {
 		internalImgName := fmt.Sprintf("%s-%03d%s", *baseName, i+1, res.Ext)
 
 		// Add image to EPUB
-		// Note: AddImageFromBytes returns the internal path used in the EPUB
 		err = e.AddDimensionedImageFile(internalImgName, res.Content, i == 0, res.Width, res.Height)
 		if err != nil {
 			log.Fatalf("Failed to add image to EPUB: %v", err)
 		}
 
 		// Create full-page image section
-		internalXmlName := fmt.Sprintf("%s-%03d%s", *baseName, i+1, "xhtml")
+		internalXmlName := fmt.Sprintf("%s-%03d%s", *baseName, i+1, ".xhtml")
 		err = e.AddFullpagePic(internalXmlName, internalImgName)
 		if err != nil {
 			log.Printf("Failed to add page to EPUB: %v", err)
@@ -123,7 +122,7 @@ func main() {
 	}
 }
 
-func processImage(index int, path string) *result {
+func processImage(index, quality int, path string) *result {
 	// 4.a Read all bytes
 	jpgData, err := os.ReadFile(path)
 	if err != nil {
@@ -132,7 +131,8 @@ func processImage(index int, path string) *result {
 
 	// 4.b Run magick
 	// magick jpeg:- -format '%w %h\n' -write info:fd:2 -quality 75% webp:-
-	cmd := exec.Command("magick", "jpeg:-", "-format", "%w %h\n", "-write", "info:fd:2", "-quality", "75%", "webp:-")
+	qualityStr := fmt.Sprintf("%d%%", quality)
+	cmd := exec.Command("magick", "jpeg:-", "-format", "%w %h\n", "-write", "info:fd:2", "-quality", qualityStr, "webp:-")
 	cmd.Stdin = bytes.NewReader(jpgData)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
