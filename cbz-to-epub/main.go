@@ -141,6 +141,10 @@ func main() {
 		if err != nil {
 			log.Printf("Failed to add page to EPUB: %v", err)
 		}
+
+		if i == 0 {
+			e.AddTocLink(internalXmlName, "Front Cover")
+		}
 	}
 }
 
