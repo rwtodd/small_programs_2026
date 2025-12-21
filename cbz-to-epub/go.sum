@@ -1,0 +1,4 @@
+github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
+github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/rwtodd/Go.Epub3 v0.0.0-20251221053605-7667d7326266 h1:cKwoOVkqmbEX0O0dW3HPs1hPwvQ5p108msdXhXxiFKw=
+github.com/rwtodd/Go.Epub3 v0.0.0-20251221053605-7667d7326266/go.mod h1:SzKWljAszfUzMe29POER7VWBm7fMC1JsjmASi0kDz+A=
