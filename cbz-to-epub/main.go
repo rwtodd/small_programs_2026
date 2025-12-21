@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ func main() {
 	publisher := flag.String("publisher", "Unknown", "EPUB publisher")
 	year := flag.Int("year", 1977, "Publication year")
 	quality := flag.Int("quality", 80, "Webp conversion quality")
+	excludePattern := flag.String("exclude", "", "Regex pattern to exclude filenames (e.g. '^zz')")
 	baseName := flag.String("imgbase", "page", "Base name for images inside EPUB")
 	flag.Parse()
 
@@ -39,6 +41,17 @@ func main() {
 		log.Fatalln("Must give an input file (.cbr/.cbz)!")
 	}
 	inputFile := flag.Args()[0]
+
+	// Pre-compile regex if provided
+	var excludeRegex *regexp.Regexp
+	if *excludePattern != "" {
+		var err error
+		excludeRegex, err = regexp.Compile(*excludePattern)
+		if err != nil {
+			log.Fatalf("Invalid regex pattern: %v", err)
+		}
+	}
+
 	tempDir := "out_tmp"
 
 	// 2. Prepare temp directory
@@ -57,6 +70,15 @@ func main() {
 	files, _ := filepath.Glob(filepath.Join(tempDir, "*"))
 	var jpegs []string
 	for _, f := range files {
+
+		// Apply Regex Exclusion
+		if excludeRegex != nil {
+			fileName := filepath.Base(f)
+			if excludeRegex.MatchString(fileName) {
+				continue
+			}
+		}
+
 		ext := strings.ToLower(filepath.Ext(f))
 		if ext == ".jpg" || ext == ".jpeg" {
 			jpegs = append(jpegs, f)
