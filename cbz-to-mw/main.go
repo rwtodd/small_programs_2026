@@ -97,6 +97,7 @@ func main() {
 		log.Fatalf("Failed to create results dir: %v", err)
 	}
 
+	log.Println(inputFile)
 	// 3. Extract archive
 	cmd7z := exec.Command("7zz", "e", "-o"+tempDir, inputFile)
 	if err := cmd7z.Run(); err != nil {
@@ -169,7 +170,7 @@ func main() {
 
 		// Generate filename: .webp or .jpeg
 		internalImgName := fmt.Sprintf("Cmx-%s-%03d%s", issueName, res.Index+1, res.Ext)
-		md5byte := fmt.Sprintf("%x", md5.Sum([]byte(internalImgName))[0])
+		md5byte := fmt.Sprintf("%02x", md5.Sum([]byte(internalImgName))[0])
 		md5dir := fmt.Sprintf("%s/%s", md5byte[0:1], md5byte)
 		wtextdata.Pages = append(wtextdata.Pages, &Page{PageNum: res.Index + 1, Fname: internalImgName, MD5Dir: md5dir})
 		err := os.WriteFile(filepath.Join(resultDir, internalImgName), res.Content, 0644)
