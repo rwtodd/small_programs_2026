@@ -39,23 +39,31 @@ func init() {
 		"add": func(a, b int) int { return a + b },
 	}
 	var err error
-	issueWikiText, err = template.New("Wikitext Form").Funcs(funcMap).Parse(`{{"{{"}}Comic Book Nav
+	issueWikiText, err = template.New("Wikitext Form").Funcs(funcMap).Parse(`
+{{- define "GraphicNovel"}}Graphic Novel Nav
+| 1 = {{.Title}}
+| 2 = {{(index .Pages 0).Fname}}
+{{end -}}
+
+{{define "ComicBook"}}Comic Book Nav
 | 1 = {{.Title}}
 | 2 = {{printf "%03d" .IssueNum}}
 | 3 = {{(index .Pages 0).Fname}}
 | 4 = {{if eq .IssueNum 1}}[[{{.Title}} (Comic Book Series)|Series]]{{else}}[[{{.Title}} {{printf "%03d" (add .IssueNum -1)}} (Comic Book Issue)|Issue {{printf "%03d" (add .IssueNum -1)}}]]{{end}}
 | 5 = [[{{.Title}} {{printf "%03d" (add .IssueNum 1)}} (Comic Book Issue)|Issue {{printf "%03d" (add .IssueNum 1)}}]]
-{{"}}"}}
+{{end -}}
+
+{{"{{"}}{{if eq .IssueNum -1}}{{template "GraphicNovel" .}}{{else}}{{template "ComicBook" .}}{{end}}{{"}}"}}
 <html>
 <form action="https://kb.rwtodd.org/rwt-gallery.php" method="POST">
     {{range .Pages}}<input type="hidden" name="images[]" value="/images/{{.MD5Dir}}/{{.Fname}}">
-	{{end}}<input type="submit" value="Launch Gallery Viewer">
+    {{end -}}
+	<input type="submit" value="Launch Gallery Viewer">
 </form>
 </html>
 Pages:
 {{range .Pages}}* [[Media:{{.Fname}}|Page {{printf "%03d" .PageNum}}]]
 {{end}}
-
 [[Category:Comic Book Issue]]`)
 	if err != nil {
 		log.Fatalln(err)
@@ -66,7 +74,7 @@ Pages:
 func main() {
 	// 1. Command line arguments
 	title := flag.String("title", "My Comic", "Comic title (e.g. Fantastic Four)")
-	issue := flag.Int("issue", 1, "Issue of the comic (0 for graphic novel)")
+	issue := flag.Int("issue", -1, "Issue of the comic (-1 for graphic novel)")
 	quality := flag.Int("quality", 80, "Webp conversion quality")
 	excludePattern := flag.String("exclude", "", "Regex pattern to exclude filenames (e.g. '^zz')")
 	flag.Parse()
@@ -147,7 +155,12 @@ func main() {
 	wg.Wait()
 
 	// 6. Get it all written to the output dir, and build up a structure for the template
-	issueName := strings.ReplaceAll(fmt.Sprintf("%s %03d", *title, *issue), " ", "_")
+	var issueName string
+	if *issue == -1 {
+		issueName = strings.ReplaceAll(*title, " ", "_")
+	} else {
+		issueName = strings.ReplaceAll(fmt.Sprintf("%s %03d", *title, *issue), " ", "_")
+	}
 	type Page struct {
 		PageNum int
 		Fname   string
@@ -180,7 +193,13 @@ func main() {
 	}
 
 	// 7. Write the template file...
-	issueFile := filepath.Join(resultDir, fmt.Sprintf("%s_(Comic_Book_Issue).wikitext", issueName))
+	var parenthetical string
+	if *issue == -1 {
+		parenthetical = "Graphic_Novel"
+	} else {
+		parenthetical = "Comic_Book_Issue"
+	}
+	issueFile := filepath.Join(resultDir, fmt.Sprintf("%s_(%s).wikitext", issueName, parenthetical))
 	issueWTxtFile, err := os.Create(issueFile)
 	if err != nil {
 		log.Fatalf("Could not create output file! %v", err)
