@@ -219,21 +219,20 @@ func processImage(index, quality int, path string) *result {
 		return &result{Err: err}
 	}
 
-	if strings.HasSuffix(path, ".webp") {
-		// just return the data since it's already webp
-		return &result{Index: index, Content: jpgData, Ext: ".webp"}
-	}
-
 	// 4.b Run magick
 	// magick jpeg:- -format '%w %h\n' -write info:fd:2 -quality 75% webp:-
 	var inputStr string
-	var inputExt string
-	if strings.HasSuffix(path, "png") || strings.HasSuffix(path, "PNG") {
+	inputExt := strings.ToLower(filepath.Ext(path))
+	if inputExt == ".webp" {
+		// just return the data since it's already webp
+		return &result{Index: index, Content: jpgData, Ext: ".webp"}
+	} else if inputExt == ".png" {
 		inputStr = "png:-"
-		inputExt = ".png"
+	} else if inputExt == ".gif" {
+		inputStr = "gif:-"
 	} else {
 		inputStr = "jpeg:-"
-		inputExt = ".jpg"
+		inputExt = ".jpg"  // make sure it's jpg with no 'e'
 	}
 	qualityStr := fmt.Sprintf("%d%%", quality)
 	cmd := exec.Command("magick", inputStr, "-quality", qualityStr, "webp:-")
