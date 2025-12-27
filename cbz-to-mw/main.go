@@ -177,7 +177,7 @@ func main() {
 	}
 	for _, res := range results {
 		if res.Err != nil {
-			log.Printf("Error processing image %d: %v", res.Index, res.Err)
+			log.Printf("Error processing image %d (%s): %v", res.Index, jpegs[res.Index], res.Err)
 			continue
 		}
 
