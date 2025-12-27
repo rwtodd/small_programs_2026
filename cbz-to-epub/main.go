@@ -80,7 +80,7 @@ func main() {
 		}
 
 		ext := strings.ToLower(filepath.Ext(f))
-		if ext == ".jpg" || ext == ".jpeg" {
+		if ext == ".jpg" || ext == ".jpeg" || ext == ".png" {
 			jpegs = append(jpegs, f)
 		}
 	}
@@ -157,8 +157,17 @@ func processImage(index, quality int, path string) *result {
 
 	// 4.b Run magick
 	// magick jpeg:- -format '%w %h\n' -write info:fd:2 -quality 75% webp:-
+	var inputStr string
+	var inputExt string
+	if strings.HasSuffix(path, "png") || strings.HasSuffix(path, "PNG") {
+		inputStr = "png:-"
+		inputExt = ".png"
+	} else {
+		inputStr = "jpeg:-"
+		inputExt = ".jpg"
+	}
 	qualityStr := fmt.Sprintf("%d%%", quality)
-	cmd := exec.Command("magick", "jpeg:-", "-format", "%w %h\n", "-write", "info:fd:2", "-quality", qualityStr, "webp:-")
+	cmd := exec.Command("magick", inputStr, "-format", "%w %h\n", "-write", "info:fd:2", "-quality", qualityStr, "webp:-")
 	cmd.Stdin = bytes.NewReader(jpgData)
 
 	var stdoutBuf, stderrBuf bytes.Buffer
@@ -179,5 +188,5 @@ func processImage(index, quality int, path string) *result {
 	if len(webpData) < len(jpgData) {
 		return &result{Index: index, Content: webpData, Ext: ".webp", Width: w, Height: h}
 	}
-	return &result{Index: index, Content: jpgData, Ext: ".jpg", Width: w, Height: h}
+	return &result{Index: index, Content: jpgData, Ext: inputExt, Width: w, Height: h}
 }
