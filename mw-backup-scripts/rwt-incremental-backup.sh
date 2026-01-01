@@ -6,7 +6,7 @@
 
 IMAGES_DIR="images"
 INCREMENTAL_DATE=$(date +%Y%m%d)
-TIMESTAMP_FILE="rwt_backup.timestamp"  # We'll create/update this
+TIMESTAMP_FILE="rwt-backup.timestamp"  # We'll create/update this
 INCREMENTAL_ZIP="../images_incremental_${INCREMENTAL_DATE}.zip"
 
 # Check if we have a timestamp from the last full backup
@@ -39,7 +39,7 @@ echo "Found $NEW_COUNT new files. Creating incremental archive: $INCREMENTAL_ZIP
 
 # Create ZIP with full path structure preserved
 # -@ reads filenames from stdin
-zip -r "$INCREMENTAL_ZIP" -@ < "$FILE_LIST"
+zip -r -9 -y "$INCREMENTAL_ZIP" -@ < "$FILE_LIST"
 
 if [ $? -eq 0 ]; then
     echo

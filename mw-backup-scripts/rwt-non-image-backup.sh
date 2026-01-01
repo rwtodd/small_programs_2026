@@ -8,11 +8,9 @@ BACKUP_DATE=$(date +%Y%m%d)
 WIKI_ZIP="../mediawiki_non_images_backup_${BACKUP_DATE}.zip"
 
 # Step 1: Create the main ZIP with exclusions (this skips ./images/.htaccess too)
-zip -r -9 "$WIKI_ZIP" . \
+zip -r -y -9 "$WIKI_ZIP" . \
     -x "./images/*" \
-    -x "./images" \
-    -x "*.zip" \
-    -x "*~"
+    -x "./images"
 
 if [ $? -eq 0 ]; then
     echo
@@ -26,3 +24,4 @@ else
     echo "Error: Failed to create ZIP file!"
     exit 1
 fi
+
