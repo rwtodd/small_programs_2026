@@ -46,10 +46,9 @@ echo "Excluding: thumb/ (thumbnails — regeneratable)"
 
 find "$IMAGES_DIR" -maxdepth 1 \
     ! -name '.' \
-    ! -regex ".*/[0-9a-f]" \
-    ! -name 'thumb' \
-    ! -name 'images' \
-    -print0 | \
+    ! -regex "${IMAGES_DIR}/[0-9a-f]" \
+    ! -wholename "${IMAGES_DIR}/thumb" \
+    ! -wholename "${IMAGES_DIR}" | \
 zip -r -y -9 "../images_misc_backup_${BACKUP_DATE}.zip" -@
 
 if [ $? -eq 0 ]; then
@@ -64,5 +63,4 @@ echo "Images backup complete!"
 echo "  - Original uploads: preserved in correct hash structure"
 echo "  - Thumbnails: fully excluded"
 echo "  - Misc files: in images_misc_backup_*.zip (includes .htaccess)"
-
 
