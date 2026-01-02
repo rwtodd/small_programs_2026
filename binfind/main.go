@@ -13,21 +13,21 @@ import (
 )
 
 const (
-	ansiBold  = "\033[1m"
+	ansiColor = "\033[1;91m" // high-inensity red
 	ansiReset = "\033[0m"
 )
 
 type stateTracker struct {
-	isBold bool
+	hasColor bool
 }
 
-func (s *stateTracker) setBold(target bool) string {
-	if s.isBold == target {
+func (s *stateTracker) setColor(target bool) string {
+	if s.hasColor == target {
 		return ""
 	}
-	s.isBold = target
+	s.hasColor = target
 	if target {
-		return ansiBold
+		return ansiColor
 	}
 	return ansiReset
 }
@@ -37,11 +37,13 @@ func main() {
 	regPattern := flag.String("r", "", "Regular expression pattern")
 	ascPattern := flag.String("a", "", "ASCII literal pattern")
 	contextSize := flag.Int("c", 0, "Minimum context in bytes")
-	useBold := flag.Bool("b", false, "Use ANSI bolding")
-	alignPara := flag.Bool("p", false, "Align output to 16-byte paragraphs (0x10)")
+	noColor := flag.Bool("nocolor", false, "Use plain output with no ANSI codes")
+	alignPara := flag.Bool("align", false, "Align output to 16-byte paragraphs (0x10)")
 
 	flag.Parse()
 	files := flag.Args()
+
+	wantsANSI := !*noColor // if they don't want no color, give them color
 
 	if len(files) == 0 || (*hexPattern == "" && *regPattern == "" && *ascPattern == "") {
 		fmt.Println("Usage: bsearch [-l hex | -r regex | -a ascii] [-c context] [-b] [-p] <files>")
@@ -76,12 +78,12 @@ func main() {
 
 		matches := re.FindAllIndex(data, -1)
 		for _, m := range matches {
-			printMatch(data, m[0], m[1], *contextSize, filepath.Base(path), multiFile, *useBold, *alignPara)
+			printMatch(data, m[0], m[1], *contextSize, filepath.Base(path), multiFile, wantsANSI, *alignPara)
 		}
 	}
 }
 
-func printMatch(data []byte, mStart, mEnd, minCtx int, fname string, showFname, wantBold, alignPara bool) {
+func printMatch(data []byte, mStart, mEnd, minCtx int, fname string, showFname, wantsANSI, alignPara bool) {
 	matchLen := mEnd - mStart
 	var dStart, dEnd int
 
@@ -121,9 +123,9 @@ func printMatch(data []byte, mStart, mEnd, minCtx int, fname string, showFname, 
 
 		// Handle the edge case: match starts exactly at the line address
 		if i == mStart {
-			fmt.Printf("%08x %s<", i, tracker.setBold(wantBold))
+			fmt.Printf("%08x %s<", i, tracker.setColor(wantsANSI))
 		} else {
-			fmt.Print(tracker.setBold(false))
+			fmt.Print(tracker.setColor(false))
 			fmt.Printf("%08x  ", i)
 		}
 
@@ -131,28 +133,28 @@ func printMatch(data []byte, mStart, mEnd, minCtx int, fname string, showFname, 
 		for j := i; j < i+16; j++ {
 			if j < dEnd && j < len(data) {
 				// Hex Digits
-				shouldBoldDigit := wantBold && (j >= mStart && j < mEnd)
-				fmt.Print(tracker.setBold(shouldBoldDigit))
+				shouldColorDigit := wantsANSI && (j >= mStart && j < mEnd)
+				fmt.Print(tracker.setColor(shouldColorDigit))
 				fmt.Printf("%02x", data[j])
 
 				// Separator
-				sep := " "
-				if j+1 == mStart {
-					sep = "<"
-				} else if j == mEnd-1 {
-					sep = ">"
-				}
-
-				shouldBoldSep := wantBold && (j+1 == mStart || (j >= mStart && j < mEnd))
-				fmt.Print(tracker.setBold(shouldBoldSep))
-				fmt.Print(sep)
-
+				colorStr := tracker.setColor(wantsANSI && (j+1 == mStart || (j >= mStart && j < mEnd)))
+				var extraSep string
 				if (j - i) == 7 {
-					fmt.Print(tracker.setBold(false))
+					extraSep = " "
+				} else {
+					extraSep = ""
+				}
+				if j+1 == mStart && j+1 != i+16 {
+					fmt.Printf("%s%s<", extraSep, colorStr)
+				} else if j == mEnd-1 {
+					fmt.Printf("%s>%s", colorStr, extraSep)
+				} else {
 					fmt.Print(" ")
+					fmt.Print(extraSep)
 				}
 			} else {
-				fmt.Print(tracker.setBold(false))
+				fmt.Print(tracker.setColor(false))
 				fmt.Print("   ")
 				if (j - i) == 7 {
 					fmt.Print(" ")
@@ -160,7 +162,7 @@ func printMatch(data []byte, mStart, mEnd, minCtx int, fname string, showFname, 
 			}
 		}
 
-		fmt.Print(tracker.setBold(false) + " |")
+		fmt.Print(tracker.setColor(false) + " |")
 
 		// --- ASCII Side ---
 		for j := i; j < i+16 && j < dEnd && j < len(data); j++ {
@@ -168,11 +170,11 @@ func printMatch(data []byte, mStart, mEnd, minCtx int, fname string, showFname, 
 			if data[j] < 32 || data[j] > 126 {
 				char = "."
 			}
-			shouldBold := wantBold && (j >= mStart && j < mEnd)
-			fmt.Print(tracker.setBold(shouldBold))
+			shouldBold := wantsANSI && (j >= mStart && j < mEnd)
+			fmt.Print(tracker.setColor(shouldBold))
 			fmt.Print(char)
 		}
-		fmt.Print(tracker.setBold(false) + "|")
+		fmt.Print(tracker.setColor(false) + "|")
 		fmt.Println()
 	}
 }
