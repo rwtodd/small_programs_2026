@@ -55,8 +55,11 @@ func main() {
 	switch {
 	case *hexPattern != "":
 		cleanHex := strings.ReplaceAll(*hexPattern, " ", "")
-		raw, _ := hex.DecodeString(cleanHex)
-		re, err = regexp.Compile(regexp.QuoteMeta(string(raw)))
+		var raw []byte
+		raw, err = hex.DecodeString(cleanHex)
+		if err == nil {
+			re, err = regexp.Compile(regexp.QuoteMeta(string(raw)))
+		}
 	case *regPattern != "":
 		re, err = regexp.Compile(strings.ReplaceAll(*regPattern, " ", ""))
 	case *ascPattern != "":
