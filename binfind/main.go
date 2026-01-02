@@ -46,8 +46,8 @@ func main() {
 	wantsANSI := !*noColor // if they don't want no color, give them color
 
 	if len(files) == 0 || (*hexPattern == "" && *regPattern == "" && *ascPattern == "") {
-		fmt.Println("Usage: bsearch [-l hex | -r regex | -a ascii] [-c context] [-b] [-p] <files>")
-		return
+		fmt.Println("Usage: binfind [-l hex | -r regex | -a ascii] [-c context] [--nocolor] [--align] <files>")
+		os.Exit(1)
 	}
 
 	var re *regexp.Regexp
@@ -65,14 +65,16 @@ func main() {
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Pattern error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	multiFile := len(files) > 1
+	hadErrors := false
 	for _, path := range files {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			hadErrors = true
 			continue
 		}
 
@@ -80,6 +82,9 @@ func main() {
 		for _, m := range matches {
 			printMatch(data, m[0], m[1], *contextSize, filepath.Base(path), multiFile, wantsANSI, *alignPara)
 		}
+	}
+	if hadErrors { // report to the OS that we errored out
+		os.Exit(1)
 	}
 }
 
