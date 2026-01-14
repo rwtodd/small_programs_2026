@@ -69,10 +69,10 @@ func main() {
 				"-i", coverFile,
 				"-map", "0:a:0", // Map the audio from the first file
 				"-map", "1:v:0", // Map the video/image from the second file
+				"-af", "aresample=resampler=soxr:precision=33:osr=44100",
 				"-c:a", "aac_at",
 				"-aac_at_mode", "cvbr",
 				"-b:a", "256k",
-				"-ar", "44100",
 				"-c:v", "copy", // CRITICAL: Don't re-encode the JPEG; keep it as mjpeg
 				"-disposition:v:0", "attached_pic", // Tell the container this is cover art
 				"-metadata", "track="+t.Number,
