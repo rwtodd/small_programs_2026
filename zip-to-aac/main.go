@@ -74,7 +74,7 @@ func main() {
 			if coverPath == "" || strings.HasPrefix(f.Name, "cover") || strings.HasPrefix(f.Name, "Cover") {
 				coverPath = targetPath
 			}
-		case ".flac", ".m4a", ".mp3":
+		case ".flac", ".m4a", ".mp3", ".ogg":
 			musicFiles = append(musicFiles, targetPath)
 		}
 	}
