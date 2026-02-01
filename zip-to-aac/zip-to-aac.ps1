@@ -34,11 +34,16 @@ if (-not (Test-Path $ZipPath)) {
 
 # Setup output and temp paths based on input filename
 $baseName = [System.IO.Path]::GetFileNameWithoutExtension($ZipPath)
-$outputDir = Join-Path (Get-Location) $baseName
-$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+$rawOutputDir = Join-Path (Get-Location) $baseName
+$rawTempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
 
-New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
-New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+# Create them first
+New-Item -ItemType Directory -Path $rawOutputDir -Force | Out-Null
+New-Item -ItemType Directory -Path $rawTempDir -Force | Out-Null
+
+# NORMALIZE: Convert PS-Drive paths (sc:\) to real Filesystem paths (/../..)
+$outputDir = (Get-Item $rawOutputDir).FullName
+$tempDir = (Get-Item $rawTempDir).FullName
 
 try {
     Write-Host "Extracting $ZipPath..."
@@ -77,7 +82,7 @@ try {
         $isAAC = ($ext -eq ".m4a" -and $codec -eq "aac")
 
         if ($isMP3 -or $isAAC) {
-            $targetPath = Join-Path $outputDir $fileName
+            $targetPath = Join-Path $outputDir ($fileName -replace ' +','_')
             if ($hasCover -or -not $cover) {
                 # Copy existing MP3/AAC as-is
                 Copy-Item -Path $inputPath -Destination $targetPath -Force
@@ -90,7 +95,7 @@ try {
             }
         } else {
             # Convert to AAC using specific audio quality flags
-            $targetPath = Join-Path $outputDir "$base.m4a"
+            $targetPath = Join-Path $outputDir ("$base.m4a" -replace ' +','_')
             $args = @("-i", $inputPath)
             
             if ($cover) {
