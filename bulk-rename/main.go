@@ -19,7 +19,8 @@ type Config struct {
 	NumFormat      string
 	Truncate       bool
 	TruncateLength int
-	Yes            bool
+	Interactive    bool
+	Apply          bool
 	Replacements   []Replacement
 }
 
@@ -36,6 +37,7 @@ func main() {
 		scanner.Split(scanNullTerminated)
 	}
 
+	var hasErrors bool
 	index := 1
 	for scanner.Scan() {
 		path := scanner.Text()
@@ -50,20 +52,30 @@ func main() {
 		index++
 
 		if filename == newFilename {
+			fmt.Printf("Skipping: %s (no change)\n", path)
 			continue
 		}
 
-		newPath := filepath.Join(dir, newFilename)
-
-		if config.Yes {
-			renameFile(path, newPath)
+		if config.Apply {
+			if err := renameFile(dir, filename, newFilename); err != nil {
+				hasErrors = true
+			}
+		} else if config.Interactive {
+			if err := confirmAndRename(dir, filename, newFilename, &config); err != nil {
+				hasErrors = true
+			}
 		} else {
-			confirmAndRename(path, newPath, &config)
+			// Dry Run (Default)
+			fmt.Printf("Renamed (Dry Run): %s -> %s\n", filepath.Join(dir, filename), newFilename)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintln(os.Stderr, "Error reading stdin:", err)
+		os.Exit(1)
+	}
+
+	if hasErrors {
 		os.Exit(1)
 	}
 }
@@ -78,7 +90,8 @@ func parseArgs() Config {
 	flag.BoolVar(&alpha, "alpha", false, "Replace non-alphanumeric characters with underscore")
 	flag.IntVar(&numDigits, "num", 0, "add prefix number (0 to disable)")
 	flag.IntVar(&truncateLength, "truncate", 0, "Truncate filename to length (0 to disable)")
-	flag.BoolVar(&config.Yes, "y", false, "Do not prompt for confirmation")
+	registerInteractiveFlag(&config.Interactive)
+	flag.BoolVar(&config.Apply, "y", false, "Apply renames without confirmation")
 
 	flag.Parse()
 
@@ -157,24 +170,32 @@ func processFilename(filename string, index int, config Config) string {
 	return name + ext
 }
 
-func renameFile(oldPath, newPath string) {
+func renameFile(dir, oldName, newName string) error {
+	oldPath := filepath.Join(dir, oldName)
+	newPath := filepath.Join(dir, newName)
 	err := os.Rename(oldPath, newPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error renaming '%s' to '%s': %v\n", oldPath, newPath, err)
-	} else {
-		fmt.Printf("Renamed: %s -> %s\n", oldPath, newPath)
+		return err
 	}
+	// print dir/old -> new (elided dir)
+	fmt.Printf("Renamed: %s -> %s\n", oldPath, newName)
+	return nil
 }
 
-func confirmAndRename(oldPath, newPath string, config *Config) {
-	fmt.Fprintf(os.Stderr, "Rename '%s' to '%s'? [y/n/a/q]: ", oldPath, newPath)
+func confirmAndRename(dir, oldName, newName string, config *Config) error {
+	oldPath := filepath.Join(dir, oldName)
+	// For prompt, use full paths or just names? User asked for succinct output.
+	// Let's use oldPath -> newName as requested for succinctness, but prompt might need to be clear.
+	// "Rename 'dir/old' to 'new'?"
 
-	// We need to read from /dev/tty for user confirmation if stdin is piped
-	tty, err := os.Open("/dev/tty")
+	fmt.Fprintf(os.Stderr, "Rename '%s' to '%s'? [y/n/a/q]: ", oldPath, newName)
+
+	// openTTY is platform dependent
+	tty, err := openTTY()
 	if err != nil {
-		// Fallback to stdin/stdout if TTY not available (unlikely in interactive usage)
-		fmt.Fprintln(os.Stderr, "Error opening /dev/tty, assuming 'n'")
-		return
+		fmt.Fprintf(os.Stderr, "Error opening TTY: %v\n", err)
+		return err
 	}
 	defer tty.Close()
 
@@ -183,16 +204,19 @@ func confirmAndRename(oldPath, newPath string, config *Config) {
 	response = strings.TrimSpace(strings.ToLower(response))
 
 	switch response {
-	case "y":
-		renameFile(oldPath, newPath)
 	case "a":
-		config.Yes = true
-		renameFile(oldPath, newPath)
+		config.Apply = true
+		fallthrough
+	case "y":
+		return renameFile(dir, oldName, newName)
 	case "q":
 		os.Exit(0)
 	case "n":
 		// Do nothing
+		return nil
 	default:
 		// Default to no? or repeat? Let's treat as 'n' for safety
+		return nil
 	}
+	return nil
 }
