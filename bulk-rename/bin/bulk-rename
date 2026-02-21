@@ -1,0 +1,160 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'optparse'
+
+config = {
+  zero: false,
+  alpha: false,
+  num: 0,
+  truncate: 0,
+  interactive: false,
+  apply: false,
+  replacements: []
+}
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: bulk-rename [options] [regex replacement ...]"
+
+  opts.on("-0", "Use null character as separator") do
+    config[:zero] = true
+  end
+
+  opts.on("-a", "--alpha", "Replace non-alphanumeric characters with underscore") do
+    config[:alpha] = true
+  end
+
+  opts.on("-n", "--num N", Integer, "Add prefix number with N digits") do |n|
+    config[:num] = n
+  end
+
+  opts.on("-t", "--truncate N", Integer, "Truncate filename to N characters") do |n|
+    config[:truncate] = n
+  end
+
+  opts.on("-i", "--interactive", "Prompt for confirmation before renaming") do
+    config[:interactive] = true
+  end
+
+  opts.on("-y", "--yes", "--apply", "Apply renames without confirmation") do
+    config[:apply] = true
+  end
+
+  opts.on("-h", "--help", "Prints this help") do
+    puts opts
+    exit
+  end
+end.parse!
+
+args = ARGV
+
+if args.length.odd?
+  STDERR.puts "Error: regex provided without replacement string"
+  exit 1
+end
+
+while args.length >= 2
+  re_str = args.shift
+  replacement = args.shift
+  begin
+    re = Regexp.new(re_str)
+    config[:replacements] << [re, replacement]
+  rescue RegexpError => e
+    STDERR.puts "Error compiling regex '#{re_str}': #{e.message}"
+    exit 1
+  end
+end
+
+separator = config[:zero] ? "\0" : "\n"
+has_errors = false
+index = 1
+
+# tty setup for interactive mode
+prompt = nil
+if config[:interactive]
+  require 'io/console'
+  require 'tty-prompt'
+  tty = IO.console
+  if tty.nil?
+    STDERR.puts "Error: Cannot open TTY for interactive mode"
+    exit 1
+  end
+  prompt = TTY::Prompt.new(input: tty, output: $stderr)
+end
+
+perform_rename = ->(op, nfn) do # old path to new filename
+  dir = File.dirname(op)
+  np = File.join(dir, nfn)
+  begin
+    File.rename(op, np)
+    puts "Renamed: #{op} -> #{nfn}"
+  rescue => e
+    STDERR.puts "Error renaming '#{op}' to '#{np}': #{e.message}"
+    has_errors = true
+  end
+end
+
+$stdin.each_line(separator, chomp: true) do |path|
+  next if path.empty?
+
+  filename = File.basename(path)
+
+  # Process
+  ext = File.extname(filename)
+  name = File.basename(filename, ext)
+
+  config[:replacements].each do |re, repl|
+    name.gsub!(re, repl)
+  end
+
+  if config[:alpha]
+    name = name.gsub(/[^a-zA-Z0-9]+/, '_').gsub(/^_|_$/, '')
+  end
+
+  if config[:truncate] > 0 && name.length > config[:truncate]
+    name = name[0, config[:truncate]]
+  end
+
+  if config[:num] > 0
+    name = sprintf("%0#{config[:num]}d_%s", index, name)
+    index += 1
+  end
+
+  new_filename = name + ext
+
+  if filename == new_filename
+    puts "Skipping: #{path} (no change)"
+    next
+  end
+
+  if config[:apply]
+    perform_rename.call(path, new_filename)
+  elsif config[:interactive]
+    choices = [
+      {key: 'y', name: 'Yes, rename this file', value: 'y'},
+      {key: 'n', name: 'No, do not do anything', value: 'n'},
+      {key: 'a', name: 'Yes, rename this file and all remaining files', value: 'a'},
+      {key: 'q', name: 'Quit, do not rename this file or any remaining files', value: 'q'}
+    ]
+    begin
+      choice = prompt.expand("Rename '#{path}' to '#{new_filename}'?", choices)
+      case choice
+      when 'y'
+        perform_rename.call(path, new_filename)
+      when 'n'
+        # do nothing
+      when 'a'
+        config[:apply] = true
+        perform_rename.call(path, new_filename)
+      when 'q'
+        exit 0
+      end
+    rescue TTY::Reader::InputInterrupt
+      exit 0
+    end
+  else
+    puts "Renamed (Dry Run): #{path} -> #{new_filename}"
+  end
+end
+
+exit 1 if has_errors
