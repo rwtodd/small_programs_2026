@@ -64,73 +64,88 @@ process {
             }
 
             # Concurrent processing using PowerShell 7's Parallel feature
-            $allFiles | Where-Object { $_.Extension -match '\.(flac|m4a|mp3|ogg)$' } | ForEach-Object -Parallel {
-                $inputPath = $_.FullName
-                $fileName = $_.Name
-                $ext = $_.Extension.ToLower()
-                $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
-                $outputDir = $using:outputDir
-                $cover = $using:coverPath
+            $audioFiles = $allFiles | Where-Object { $_.Extension -match '\.(flac|m4a|mp3|ogg)$' }
+            $totalAudio = $audioFiles.Count
 
-                # Probe file for codec and cover presence using ffprobe
-                $probeRaw = ffprobe -v quiet -show_streams -print_format json $inputPath | ConvertFrom-Json
-                $audioStream = $probeRaw.streams | Where-Object { $_.codec_type -eq "audio" } | Select-Object -First 1
-                $codec = $audioStream.codec_name
-                
-                $hasCover = $probeRaw.streams | Where-Object { 
-                    $_.codec_type -eq "video" -and $_.disposition.attached_pic -eq 1 
-                }
+            if ($totalAudio -gt 0) {
+                $processedRef = [ref]0
 
-                $isMP3 = ($ext -eq ".mp3" -and $codec -eq "mp3")
-                $isAAC = ($ext -eq ".m4a" -and $codec -eq "aac")
+                $audioFiles | ForEach-Object -Parallel {
+                    $inputPath = $_.FullName
+                    $fileName = $_.Name
+                    $ext = $_.Extension.ToLower()
+                    $base = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+                    $outputDir = $using:outputDir
+                    $cover = $using:coverPath
+                    $albumName = $using:baseName
 
-                if ($isMP3 -or $isAAC) {
-                    $targetPath = Join-Path $outputDir ($fileName -replace ' +', '_')
-                    if ($hasCover -or -not $cover) {
-                        # Copy existing MP3/AAC as-is
-                        Copy-Item -Path $inputPath -Destination $targetPath -Force
+                    # Atomic thread-safe increment
+                    $current = [System.Threading.Interlocked]::Increment($using:processedRef)
+
+                    Write-Progress -Activity "Converting Album: $albumName" -Status "[$current / $using:totalAudio] $fileName" -PercentComplete (($current / $using:totalAudio) * 100)
+
+                    # Probe file for codec and cover presence using ffprobe
+                    $probeRaw = ffprobe -v quiet -show_streams -print_format json $inputPath | ConvertFrom-Json
+                    $audioStream = $probeRaw.streams | Where-Object { $_.codec_type -eq "audio" } | Select-Object -First 1
+                    $codec = $audioStream.codec_name
+                    
+                    $hasCover = $probeRaw.streams | Where-Object { 
+                        $_.codec_type -eq "video" -and $_.disposition.attached_pic -eq 1 
+                    }
+
+                    $isMP3 = ($ext -eq ".mp3" -and $codec -eq "mp3")
+                    $isAAC = ($ext -eq ".m4a" -and $codec -eq "aac")
+
+                    if ($isMP3 -or $isAAC) {
+                        $targetPath = Join-Path $outputDir ($fileName -replace ' +', '_')
+                        if ($hasCover -or -not $cover) {
+                            # Copy existing MP3/AAC as-is
+                            Copy-Item -Path $inputPath -Destination $targetPath -Force
+                        }
+                        else {
+                            # Embed missing cover into existing MP3/AAC
+                            $ffargs = @("-i", $inputPath, "-i", $cover, "-map", "0", "-map", "-0:v", "-map", "1:v", "-c", "copy", "-map_metadata", "0", "-disposition:v", "attached_pic")
+                            if ($isMP3) { $ffargs += @("-id3v2_version", "3") } else { $ffargs += @("-movflags", "+faststart") }
+                            $ffargs += $targetPath
+                            & ffmpeg -v error -y @ffargs
+                        }
                     }
                     else {
-                        # Embed missing cover into existing MP3/AAC
-                        $ffargs = @("-i", $inputPath, "-i", $cover, "-map", "0", "-map", "-0:v", "-map", "1:v", "-c", "copy", "-map_metadata", "0", "-disposition:v", "attached_pic")
-                        if ($isMP3) { $ffargs += @("-id3v2_version", "3") } else { $ffargs += @("-movflags", "+faststart") }
-                        $ffargs += $targetPath
+                        # Convert to AAC using specific audio quality flags
+                        $targetPath = Join-Path $outputDir ("$base.m4a" -replace ' +', '_')
+                        $ffargs = @("-i", $inputPath)
+                        
+                        if ($cover) {
+                            $ffargs += @("-i", $cover, "-map", "0:a:0", "-map", "1:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic")
+                        }
+                        else {
+                            $ffargs += @("-map", "0:a:0")
+                        }
+
+                        $ffargs += @(
+                            "-map_metadata", "0",
+                            "-id3v2_version", "3",
+                            "-af", "aresample=resampler=soxr:precision=33:osr=44100",
+                            "-c:a", "aac_at",
+                            "-aac_at_mode", "cvbr",
+                            "-b:a", "256k",
+                            "-movflags", "+faststart",
+                            $targetPath
+                        )
                         & ffmpeg -v error -y @ffargs
                     }
-                }
-                else {
-                    # Convert to AAC using specific audio quality flags
-                    $targetPath = Join-Path $outputDir ("$base.m4a" -replace ' +', '_')
-                    $ffargs = @("-i", $inputPath)
-                    
-                    if ($cover) {
-                        $ffargs += @("-i", $cover, "-map", "0:a:0", "-map", "1:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic")
+
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Failed to process $fileName"
                     }
                     else {
-                        $ffargs += @("-map", "0:a:0")
+                        Write-Host "Processed: $fileName"
                     }
 
-                    $ffargs += @(
-                        "-map_metadata", "0",
-                        "-id3v2_version", "3",
-                        "-af", "aresample=resampler=soxr:precision=33:osr=44100",
-                        "-c:a", "aac_at",
-                        "-aac_at_mode", "cvbr",
-                        "-b:a", "256k",
-                        "-movflags", "+faststart",
-                        $targetPath
-                    )
-                    & ffmpeg -v error -y @ffargs
-                }
-
-                if ($LASTEXITCODE -ne 0) {
-                    Write-Error "Failed to process $fileName"
-                }
-                else {
-                    Write-Host "Processed: $fileName"
-                }
-
-            } -ThrottleLimit 8
+                } -ThrottleLimit 8
+                
+                Write-Progress -Activity "Converting Album: $baseName" -Completed
+            }
 
         }
         finally {
