@@ -12,25 +12,42 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/schollz/progressbar/v3"
 )
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "--help" {
-		fmt.Println("usage: zip-to-aac path/to/album.zip")
+		fmt.Fprintln(os.Stderr, "usage: zip-to-aac path/to/album.zip [path/to/another.zip ...]")
 		os.Exit(1)
 	}
-	zipFile := os.Args[1]
+
+	hasError := false
+	for _, zipFile := range os.Args[1:] {
+		err := processZip(zipFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed processing %s: %v\n", zipFile, err)
+			hasError = true
+		}
+	}
+
+	if hasError {
+		os.Exit(1)
+	}
+}
+
+func processZip(zipFile string) error {
 
 	base := strings.TrimSuffix(filepath.Base(zipFile), ".zip")
 	outputDir := base
 	err := os.MkdirAll(outputDir, 0755)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("error creating output dir: %w", err)
 	}
 
 	tempDir, err := os.MkdirTemp("", "zip_extract_")
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("error creating temp dir: %w", err)
 	}
 	defer os.RemoveAll(tempDir)
 	//fmt.Println("Temp dir: ", tempDir)
@@ -38,7 +55,7 @@ func main() {
 	// Unzip the file
 	r, err := zip.OpenReader(zipFile)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("error opening zip: %w", err)
 	}
 	defer r.Close()
 
@@ -52,19 +69,22 @@ func main() {
 		targetPath := filepath.Join(tempDir, f.Name)
 		err = os.MkdirAll(filepath.Dir(targetPath), 0755)
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("error creating inner dir: %w", err)
 		}
 		outF, err := os.Create(targetPath)
 		if err != nil {
-			panic(err)
+			return fmt.Errorf("error creating target file: %w", err)
 		}
 		inF, err := f.Open()
 		if err != nil {
-			panic(err)
+			outF.Close()
+			return fmt.Errorf("error opening zip file member: %w", err)
 		}
 		_, err = io.Copy(outF, inF)
 		if err != nil {
-			panic(err)
+			outF.Close()
+			inF.Close()
+			return fmt.Errorf("error extracting file: %w", err)
 		}
 		outF.Close()
 		inF.Close()
@@ -80,25 +100,44 @@ func main() {
 	}
 
 	if coverPath == "" {
-		fmt.Println("Warning: No cover art found in ZIP. Proceeding without embedding cover where necessary.")
+		fmt.Fprintf(os.Stderr, "Warning: No cover art found in ZIP %s. Proceeding without embedding cover where necessary.\n", zipFile)
 	}
 
 	// Process music files concurrently
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 8) // Limit to 8 concurrent ffmpeg runs
+	var errMu sync.Mutex
+	var errs []error
+
+	bar := progressbar.Default(int64(len(musicFiles)), "Converting Album: "+base)
+
 	for _, input := range musicFiles {
 		wg.Add(1)
 		go func(input string) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			processFile(input, coverPath, outputDir)
+			err := processFile(input, coverPath, outputDir)
+			if err != nil {
+				errMu.Lock()
+				errs = append(errs, err)
+				errMu.Unlock()
+			}
+			bar.Add(1)
 		}(input)
 	}
 	wg.Wait()
+
+	if len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", e)
+		}
+		return fmt.Errorf("encountered %d errors during conversion", len(errs))
+	}
+	return nil
 }
 
-func processFile(input, cover, outputDir string) {
+func processFile(input, cover, outputDir string) error {
 	filename := filepath.Base(input)
 	ext := strings.ToLower(filepath.Ext(filename))
 	baseName := strings.TrimSuffix(filename, ext)
@@ -114,13 +153,13 @@ func processFile(input, cover, outputDir string) {
 			// Copy as-is if has cover or no cover available
 			err := copyFile(input, outputFile)
 			if err != nil {
-				fmt.Printf("Error copying %s: %v\n", filename, err)
+				return fmt.Errorf("error copying %s: %w", filename, err)
 			}
 		} else {
 			// Embed cover
 			err := embedCover(input, cover, outputFile, isMP3)
 			if err != nil {
-				fmt.Printf("Error embedding cover in %s: %v\n", filename, err)
+				return fmt.Errorf("error embedding cover in %s: %w", filename, err)
 			}
 		}
 	} else {
@@ -130,15 +169,16 @@ func processFile(input, cover, outputDir string) {
 			// Convert without cover
 			err := convertFileWithoutCover(input, outputFile)
 			if err != nil {
-				fmt.Printf("Error converting %s without cover: %v\n", filename, err)
+				return fmt.Errorf("error converting %s without cover: %w", filename, err)
 			}
 		} else {
 			err := convertFile(input, cover, outputFile)
 			if err != nil {
-				fmt.Printf("Error converting %s: %v\n", filename, err)
+				return fmt.Errorf("error converting %s: %w", filename, err)
 			}
 		}
 	}
+	return nil
 }
 
 func getCodec(input string) string {
