@@ -312,11 +312,41 @@ if (empty($toc) && count($image_list) > 0) {
         const natW = activeImg.naturalWidth;
         const natH = activeImg.naturalHeight;
         const vRect = viewer.getBoundingClientRect();
+        const vW = vRect.width;
+        const vH = vRect.height;
 
-        initialFitScale = Math.min(vRect.width / natW, vRect.height / natH);
-        zoomScale = initialFitScale;
+        let targetScale;
+        let startFromTop = false;
+        let startFromLeft = false;
+
+        if (natH > natW) {
+            // Portrait image → fill width, start from top
+            targetScale = vW / natW;
+            startFromTop = true;
+        } else {
+            // Landscape / square image → fill height, start from left
+            targetScale = vH / natH;
+            startFromLeft = true;
+        }
+
+        initialFitScale = targetScale;
+        zoomScale = targetScale;
         panX = 0;
         panY = 0;
+
+        // Position the initial view according to reading direction
+        const scaledW = natW * zoomScale;
+        const scaledH = natH * zoomScale;
+
+        if (startFromTop) {
+            // Align top of image with top of viewer
+            panY = (scaledH / 2) - (vH / 2);
+        }
+
+        if (startFromLeft) {
+            // Align left of image with left of viewer
+            panX = (scaledW / 2) - (vW / 2);
+        }
 
         activeImg.style.position = 'absolute';
         activeImg.style.left = '50%';
@@ -330,7 +360,12 @@ if (empty($toc) && count($image_list) > 0) {
         activeImg.style.willChange = 'transform';
         activeImg.style.cursor = 'grab';
 
+        // Apply initial position
         updateImageTransform(activeImg);
+
+        // Clamp after transform is applied (safer)
+        clampPan(activeImg);
+        updateImageTransform(activeImg); // re-apply after possible clamping
     }
 
     function exitZoomMode() {
