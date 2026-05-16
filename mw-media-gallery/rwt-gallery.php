@@ -58,6 +58,18 @@ if (!empty($toc_raw)) {
         }));
     }
 }
+
+// Always provide a default TOC if user didn't supply one
+if (empty($toc) && count($image_list) > 0) {
+    $totalPages = count($image_list);
+    $middlePage = (int) ceil($totalPages / 2);
+
+    $toc = [
+        ['page' => 1, 'title' => 'First Page'],
+        ['page' => $middlePage, 'title' => 'Middle Page'],
+        ['page' => $totalPages, 'title' => 'Last Page'],
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -95,12 +107,6 @@ if (!empty($toc_raw)) {
             padding: 6px 12px; border-radius: 15px; z-index: 1000;
         }
 
-        #close-zoom {
-            display: none; position: fixed; top: 15px; left: 15px; z-index: 1000;
-            padding: 10px 18px; background: var(--accent); color: white;
-            border: none; border-radius: 5px; font-weight: bold; cursor: pointer;
-        }
-
         #filmstrip { 
             position: fixed; bottom: 0; left: 0; width: 100%; height: 90px; 
             background: var(--ui-bg); display: flex; overflow-x: auto; 
@@ -117,12 +123,26 @@ if (!empty($toc_raw)) {
         .thumb-slot.active { border-color: var(--accent); background: #333; color: #fff; }
         .thumb-slot img { width: 100%; height: 100%; object-fit: cover; }
 
-        /* TOC Button */
-        #toc-btn {
-            position: fixed; top: 15px; left: 70px; z-index: 1000;
-            background: var(--ui-bg); color: white; border: none;
-            padding: 8px 14px; border-radius: 5px; cursor: pointer;
-            font-size: 15px; line-height: 1;
+        /* Active thumbnail repurposed as TOC button */
+        .thumb-slot.toc-active {
+            background: #1f3a5f !important;
+            color: #7eb3ff;
+            border-color: #36c !important;
+            font-weight: 600;
+        }
+        .thumb-slot.toc-active:hover {
+            background: #2a4a7a !important;
+        }
+        .thumb-slot.toc-active .toc-content {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1px;
+            font-size: 12px;
+        }
+        .thumb-slot.toc-active .toc-icon {
+            font-size: 16px;
         }
 
         /* TOC Overlay */
@@ -164,8 +184,7 @@ if (!empty($toc_raw)) {
             overflow: hidden;
         }
         body.is-zoomed #filmstrip, 
-        body.is-zoomed .counter, 
-        body.is-zoomed #toc-btn { 
+        body.is-zoomed .counter { 
             display: none; 
         }
         body.is-zoomed #close-zoom { display: block; }
@@ -173,7 +192,6 @@ if (!empty($toc_raw)) {
 </head>
 <body id="main-body">
 
-<button id="close-zoom" onclick="exitZoom()">✕ Close Zoom</button>
 <div class="counter"><span id="current-idx">1</span> / <?= count($image_list) ?></div>
 
 <div id="viewer"></div>
@@ -199,10 +217,13 @@ if (!empty($toc_raw)) {
     let lastY = 0;
     let initialPinchDist = 0;
     let initialPinchScale = 1;
+    let lastPinchCenterX = 0;
+    let lastPinchCenterY = 0;
     let touchMoved = false;
 
-    // Optional TOC data (1-based pages)
+    // TOC data (always present - either user-provided or default)
     const tocData = <?php echo json_encode($toc); ?>;
+    let currentTocSlot = null; // tracks the thumb slot currently showing as TOC button
 
     function init() {
         images.forEach((_, i) => {
@@ -215,14 +236,15 @@ if (!empty($toc_raw)) {
         });
         showImage(0);
 
-        if (tocData && tocData.length > 0) {
-            initTocUI();
-        }
+        // Always initialize TOC overlay (we always have a TOC now)
+        initTocOverlay();
     }
 
     function captureThumb(img, index) {
         const slot = document.getElementById(`thumb-slot-${index}`);
+        if (!slot) return;
         if (slot.querySelector('img')) return;
+
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
         const scale = 80 / img.naturalHeight;
@@ -231,8 +253,27 @@ if (!empty($toc_raw)) {
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const thumbImg = document.createElement('img');
         thumbImg.src = canvas.toDataURL('image/jpeg', 0.6);
-        slot.innerHTML = '';
-        slot.appendChild(thumbImg);
+
+        // Only set thumbnail if this slot is NOT currently the TOC button
+        if (!slot.classList.contains('toc-active')) {
+            slot.innerHTML = '';
+            slot.appendChild(thumbImg);
+        } else {
+            // Slot is currently TOC — save the thumbnail for later restoration
+            slot.dataset.capturedThumb = thumbImg.src;
+        }
+
+        // If this is the current page and we have a TOC, make sure the slot shows as TOC button
+        if (index === currentIndex && tocData.length > 0) {
+            // Use setTimeout to ensure DOM is stable
+            setTimeout(() => {
+                const currentSlot = document.getElementById(`thumb-slot-${index}`);
+                if (currentSlot && !currentSlot.classList.contains('toc-active')) {
+                    makeCurrentSlotTocButton(currentSlot, index);
+                    currentTocSlot = currentSlot;
+                }
+            }, 10);
+        }
     }
 
     // === NEW ZOOM SYSTEM (pinch + wheel + drag + tap/click to toggle) ===
@@ -361,9 +402,31 @@ if (!empty($toc_raw)) {
         });
 
         counterText.innerText = currentIndex + 1;
+
+        // Restore previous TOC slot (if any) back to normal thumbnail
+        if (currentTocSlot) {
+            restoreThumbSlot(currentTocSlot);
+            currentTocSlot = null;
+        }
+
         document.querySelectorAll('.thumb-slot').forEach(s => s.classList.remove('active'));
         const activeSlot = document.getElementById(`thumb-slot-${index}`);
         activeSlot.classList.add('active');
+
+        // Convert current slot to TOC button **only if** the thumbnail has already been captured
+        // (prevents captureThumb from overwriting it later)
+        if (tocData && tocData.length > 0) {
+            const hasThumbnail = activeSlot.querySelector('img') || activeSlot.dataset.capturedThumb;
+            
+            if (hasThumbnail) {
+                makeCurrentSlotTocButton(activeSlot, index);
+                currentTocSlot = activeSlot;
+            } else {
+                // Thumbnail not ready yet — captureThumb will handle conversion when it fires
+                currentTocSlot = activeSlot;
+            }
+        }
+
         activeSlot.scrollIntoView({ behavior: 'smooth', inline: 'center' });
     }
 
@@ -394,6 +457,10 @@ if (!empty($toc_raw)) {
                 e.touches[0].clientY - e.touches[1].clientY
             );
             initialPinchScale = zoomScale;
+
+            // Record initial pinch center for focal zoom
+            lastPinchCenterX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            lastPinchCenterY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
         }
         e.preventDefault();
     }, {passive: false});
@@ -418,14 +485,43 @@ if (!empty($toc_raw)) {
                 e.touches[0].clientX - e.touches[1].clientX,
                 e.touches[0].clientY - e.touches[1].clientY
             );
+
+            // Calculate current pinch center (focal point)
+            const currentCenterX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            const currentCenterY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
             if (initialPinchDist > 10) {
                 const scaleFactor = currentDist / initialPinchDist;
-                zoomScale = initialPinchScale * scaleFactor;
-                zoomScale = Math.max(0.2, Math.min(zoomScale, 8));
+                const newScale = initialPinchScale * scaleFactor;
+                const oldScale = zoomScale;
+                zoomScale = Math.max(0.2, Math.min(newScale, 8));
+
                 if (Math.abs(scaleFactor - 1) > 0.01) touchMoved = true;
+
+                // Focal zoom: adjust pan so the pinch point stays under the fingers
+                if (oldScale !== zoomScale) {
+                    const rect = viewer.getBoundingClientRect();
+                    const focalX = currentCenterX - rect.left;
+                    const focalY = currentCenterY - rect.top;
+
+                    const imgCenterX = rect.width / 2 + panX;
+                    const imgCenterY = rect.height / 2 + panY;
+
+                    const offX = focalX - imgCenterX;
+                    const offY = focalY - imgCenterY;
+
+                    const scaleRatio = zoomScale / oldScale;
+                    panX = panX - offX * (scaleRatio - 1);
+                    panY = panY - offY * (scaleRatio - 1);
+                }
+
                 clampPan(activeImg);
                 updateImageTransform(activeImg);
             }
+
+            // Update last center for next frame
+            lastPinchCenterX = currentCenterX;
+            lastPinchCenterY = currentCenterY;
         }
         e.preventDefault();
     }, {passive: false});
@@ -437,6 +533,8 @@ if (!empty($toc_raw)) {
                 setTimeout(() => { if (zoomMode) exitZoomMode(); }, 60);
             }
             initialPinchDist = 0;
+            lastPinchCenterX = 0;
+            lastPinchCenterY = 0;
             touchMoved = false;
         } else if (e.touches.length === 1) {
             initialPinchDist = 0;
@@ -524,21 +622,45 @@ if (!empty($toc_raw)) {
         updateImageTransform(activeImg);
     }, {passive: false});
 
-    // Keyboard
+    // Keyboard navigation
     document.addEventListener('keydown', e => {
+        if (zoomMode) {
+            // In zoom mode: arrow keys pan the image
+            const step = 60 / Math.max(1, zoomScale * 0.6); // smaller steps when more zoomed in
+            let moved = false;
+
+            if (e.key === "ArrowLeft")  { panX += step; moved = true; }
+            if (e.key === "ArrowRight") { panX -= step; moved = true; }
+            if (e.key === "ArrowUp")    { panY += step; moved = true; }
+            if (e.key === "ArrowDown")  { panY -= step; moved = true; }
+
+            if (moved) {
+                e.preventDefault();
+                const activeImg = document.querySelector('.slide.active');
+                if (activeImg) {
+                    clampPan(activeImg);
+                    updateImageTransform(activeImg);
+                }
+            }
+            if (e.key === "Escape") exitZoomMode();
+            return;
+        }
+
+        // Normal mode: change pages
         if (e.key === "ArrowRight") showImage(currentIndex + 1);
         if (e.key === "ArrowLeft")  showImage(currentIndex - 1);
         if (e.key === "Escape")     exitZoom();
     });
 
-    // TOC UI
-    function initTocUI() {
-        const tocBtn = document.createElement('button');
-        tocBtn.id = 'toc-btn';
-        tocBtn.innerHTML = '☰ TOC';
-        tocBtn.title = 'Jump to section';
-        document.body.appendChild(tocBtn);
+    // (old initTocUI removed - now using dynamic per-page TOC slot + initTocOverlay)
 
+    function showTocOverlay() {
+        const overlay = document.getElementById('toc-overlay');
+        if (overlay) overlay.style.display = 'flex';
+    }
+
+    // Create the TOC overlay (called once)
+    function initTocOverlay() {
         const overlay = document.createElement('div');
         overlay.id = 'toc-overlay';
         overlay.className = 'toc-overlay';
@@ -569,9 +691,60 @@ if (!empty($toc_raw)) {
             listEl.appendChild(item);
         });
 
-        tocBtn.onclick = () => { overlay.style.display = 'flex'; };
         overlay.querySelector('.toc-close').onclick = () => { overlay.style.display = 'none'; };
         overlay.onclick = (ev) => { if (ev.target === overlay) overlay.style.display = 'none'; };
+    }
+
+    // Turn the current active thumb slot into a TOC button
+    function makeCurrentSlotTocButton(slot, pageIndex) {
+        if (!slot) return;
+
+        // Save current content (thumbnail or number) for restoration
+        if (!slot.dataset.originalHtml && !slot.dataset.capturedThumb) {
+            slot.dataset.originalHtml = slot.innerHTML;
+        }
+
+        slot.classList.add('toc-active');
+        slot.innerHTML = `
+            <div class="toc-content">
+                <div class="toc-icon">☰</div>
+                <div style="font-size:10px; opacity:0.85;">TOC</div>
+            </div>
+        `;
+        slot.title = 'Table of Contents';
+
+        // Override click to open TOC instead of changing page
+        slot.onclick = (e) => {
+            e.stopImmediatePropagation();
+            showTocOverlay();
+        };
+    }
+
+    // Restore a slot back to normal thumbnail behavior
+    function restoreThumbSlot(slot) {
+        if (!slot) return;
+
+        slot.classList.remove('toc-active');
+
+        const idx = parseInt(slot.id.replace('thumb-slot-', ''));
+
+        if (slot.dataset.capturedThumb) {
+            // We have a previously captured thumbnail — restore it
+            slot.innerHTML = '';
+            const thumbImg = document.createElement('img');
+            thumbImg.src = slot.dataset.capturedThumb;
+            slot.appendChild(thumbImg);
+            delete slot.dataset.capturedThumb;
+        } else if (slot.dataset.originalHtml) {
+            slot.innerHTML = slot.dataset.originalHtml;
+            delete slot.dataset.originalHtml;
+        } else {
+            // Fallback
+            slot.innerHTML = `<span>${idx + 1}</span>`;
+        }
+
+        // Restore original click behavior
+        slot.onclick = () => showImage(idx);
     }
 
     init();
