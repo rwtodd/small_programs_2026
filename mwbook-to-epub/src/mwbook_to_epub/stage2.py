@@ -9,6 +9,7 @@ stage 2 against an existing workdir or even raw files + the IMAGEs directory.
 from __future__ import annotations
 
 import html
+import json
 import logging
 import re
 from pathlib import Path
@@ -24,8 +25,9 @@ from mwparserfromhell.nodes import (
     ExternalLink,
 )
 
-from .models import ConversionContext
+from .models import ConversionContext, BookMetadata
 from .templates import TEMPLATE_HANDLERS, render_template
+from .toc import ensure_toc_json
 from .utils import strip_last_parenthetical, safe_filename
 
 log = logging.getLogger(__name__)
@@ -59,8 +61,23 @@ class WikitextConverter:
         Returns the inner content suitable for <body>...</body> (or for
         rwt_epub's add_xhtml_body).
         """
-        # 1. Cheap pre-processing (these are safe to do on raw source)
-        cleaned = self._preprocess(wikitext)
+        # 1. Strip junk (arrow navigation paragraphs, [[Category:...]] lines, Generic Nav templates)
+        #    while the wikitext still contains the raw markup these regexes look for.
+        #    MUST run before _pre_expand_templates_and_links, because link simplification
+        #    turns [[Target|Display]] into plain Display text and destroys the patterns.
+        wikitext = self._preprocess(wikitext)
+
+        # 2. Early pre-expansion of known templates (esp. Hebrew text) and wikilinks.
+        #    Removes inner | from templates and links before table parsing and other
+        #    structural work. This is the key enabler for reliable pipe tables.
+        wikitext = self._pre_expand_templates_and_links(wikitext)
+
+        # 3. Cite handling (benefits from templates already expanded inside <ref> bodies)
+        wikitext = self._preprocess_cite(wikitext)
+
+        # 4. (The old "cleaned" variable is no longer needed; the result of the three
+        #    pre-steps above is what we parse.)
+        cleaned = wikitext
 
         # 2. Parse
         parsed = mwp.parse(cleaned)
@@ -69,7 +86,11 @@ class WikitextConverter:
         parts: list[str] = []
 
         if self.ctx.emit_title_h1:
-            display = strip_last_parenthetical(page_title.replace("_", " "))
+            # Prefer the nice display_title from the TOC (via metadata) when available.
+            # Falls back to cleaning the raw page_title (for ad-hoc runs without full ctx).
+            display = self.ctx.page_to_display.get(page_title)
+            if not display:
+                display = strip_last_parenthetical(page_title.replace("_", " "))
             parts.append(f"<h1>{html.escape(display)}</h1>\n")
 
         # === During-render structural list builder ===
@@ -195,7 +216,7 @@ class WikitextConverter:
             flags=re.IGNORECASE
         )
 
-        # Final safety net for entity double-escaping
+        # Final safety net for entity double-escaping (run early)
         body = re.sub(r'&amp;(#\w+;|\w+;)', r'&\1', body)
 
         # Ultimate normalization pass for entities
@@ -287,6 +308,18 @@ class WikitextConverter:
 
         body = _escape_stray_chars(body)
 
+        # Final aggressive repair for any double-escaped numeric or named entities.
+        # This catches cases like &amp;#x05d7; that can be produced when mwparserfromhell
+        # splits injected HTML (from early template expansion) into per-character nodes
+        # inside <span class="hebrew-text"> etc., especially in the cite reference path.
+        # Must run after _escape_stray_chars (which can re-damage entities it doesn't perfectly recognize).
+        body = re.sub(r'&amp;#(x[0-9a-fA-F]+|\d+);', r'&#\1;', body)
+        body = re.sub(r'&amp;(#\w+;|\w+;)', r'&\1', body)
+
+        # One last normalize pass so any &times; (or other entities we added to the
+        # map) that were repaired from &amp;times; form get converted to numeric.
+        body = self._normalize_entities(body)
+
         # Final whitespace normalization to match the exact style of the LIST_TESTS
         # expectations: single blank line between top-level blocks, no blank line
         # immediately after <h1> (or other headings) when the next content is a block.
@@ -338,6 +371,102 @@ class WikitextConverter:
             return ""
 
         text = arrow_nav_para.sub(_remove_arrow_nav, text)
+
+        return text
+
+    def _pre_expand_templates_and_links(self, text: str) -> str:
+        """
+        Early expansion of *templates* to remove internal vertical bars.
+
+        Done before structural parsing (especially tables). We deliberately
+        leave wikilinks alone here so that normal body [[Internal Page|text]]
+        nodes survive and can be turned into real <a href="correct-numbered.xhtml">
+        links using the metadata mappings.  Only templates (the main source of
+        | inside table cells) are expanded globally.
+        """
+        if not text or '{{' not in text:
+            return text
+
+        def expand_template(m):
+            full = m.group(0)
+            name = m.group(1).strip().lower().replace(' ', '').replace('_', '')
+            params_str = m.group(2)
+
+            params = {}
+            for p in re.split(r'\s*\|\s*', params_str):
+                if not p:
+                    continue
+                if '=' in p:
+                    k, v = p.split('=', 1)
+                    params[k.strip().lower()] = v.strip()
+                else:
+                    if '1' not in params and not params:
+                        params['1'] = p.strip()
+
+            try:
+                rendered = render_template(name, params, ctx=self.ctx)
+                return rendered
+            except Exception:
+                return full
+
+        text = re.sub(r'\{\{\s*([^\|\}]+?)\s*\|(.*?)\}\}', expand_template, text, flags=re.DOTALL)
+        return text
+
+    def _preprocess_cite(self, text: str) -> str:
+        """
+        Limited but functional support for MediaWiki <ref> / <references>
+        (the style used in test011 and the 32 Paths book).
+        """
+        if "<ref" not in text.lower() and "<references" not in text.lower():
+            return text
+
+        ref_defs: dict[str, str] = {}
+        ref_order: list[str] = []
+
+        def extract_defs(m):
+            inner = m.group(1)
+            for rm in re.finditer(r'<ref\s+name=["\']([^"\']+)["\']\s*>(.*?)</ref>', inner, re.I | re.DOTALL):
+                name = rm.group(1).strip()
+                content = rm.group(2).strip()
+                if name and name not in ref_defs:
+                    ref_defs[name] = content
+                    ref_order.append(name)
+            return ""
+
+        text = re.sub(r'<references[^>]*>(.*?)</references\s*>', extract_defs, text, flags=re.I | re.DOTALL)
+
+        cite_num = {}
+        counter = 0
+
+        def replace_ref(m):
+            nonlocal counter
+            name = m.group(1).strip()
+            if name not in cite_num:
+                counter += 1
+                cite_num[name] = counter
+            num = cite_num[name]
+            return f'<sup id="cite_ref-{name}_{num}-0" class="reference"><a href="#cite_note-{name}-{num}">[{num}]</a></sup>'
+
+        text = re.sub(r'<ref\s+name=["\']([^"\']+)["\']\s*/?\s*>', replace_ref, text, flags=re.I)
+
+        if ref_defs:
+            notes = []
+            has_notes_heading = (
+                re.search(r'<h2[^>]*>\s*Notes\s*</h2>', text, re.I) or
+                re.search(r'^==\s*Notes\s*==', text, re.M | re.I)
+            )
+            if not has_notes_heading:
+                notes.append('<h2>  Notes  </h2>')
+            notes.append('<ol class="references">')
+            for idx, name in enumerate(ref_order, 1):
+                raw = ref_defs.get(name, "")
+                try:
+                    rendered = "".join(self._render(n) for n in mwp.parse(raw).nodes)
+                except Exception:
+                    rendered = html.escape(raw)
+                notes.append(f'<li id="cite_note-{name}-{idx}"><a href="#cite_ref-{name}_{idx}-0">↑</a> {rendered}</li>')
+            notes.append('</ol>')
+            text = text.rstrip() + "\n\n" + "\n".join(notes) + "\n"
 
         return text
 
@@ -526,19 +655,38 @@ class WikitextConverter:
 
     def _is_internal_link(self, target: str) -> bool:
         """Is this wikilink target one of the pages that belong to the book?"""
+        if self.ctx.page_to_xhtml:
+            # Exact match on the authoritative page titles from metadata
+            t = target.strip()
+            if t in self.ctx.page_to_xhtml:
+                return True
+            t2 = t.replace("_", " ")
+            if t2 in self.ctx.page_to_xhtml:
+                return True
+            t3 = t.replace(" ", "_")
+            if t3 in self.ctx.page_to_xhtml:
+                return True
+            return False
         if not self.ctx.book_pages:
             return False
-        # Try a few normalizations
-        candidates = {
-            target,
-            target.replace("_", " "),
-            target.replace(" ", "_"),
-        }
+        # Fallback for ad-hoc runs
+        candidates = {target, target.replace("_", " "), target.replace(" ", "_")}
         return bool(candidates & self.ctx.book_pages)
 
     def _guess_xhtml_filename(self, target: str) -> str:
-        """Best-effort guess at the xhtml filename for an internal link."""
-        clean = strip_last_parenthetical(target.replace("_", " "))
+        """Return the final xhtml filename for an internal book link, using the
+        exact names that Stage 1 computed from the TOC (the numbered + nice-title
+        versions the user likes). Falls back to a slugified guess for unknown pages.
+        """
+        t = target.strip()
+        # Direct lookup in the authoritative map (preferred)
+        if self.ctx.page_to_xhtml:
+            for cand in (t, t.replace("_", " "), t.replace(" ", "_")):
+                if cand in self.ctx.page_to_xhtml:
+                    return self.ctx.page_to_xhtml[cand]
+
+        # Old fallback behavior (used when running without full metadata context)
+        clean = strip_last_parenthetical(t.replace("_", " "))
         slug = safe_filename(clean)
         return f"{slug}.xhtml"
 
@@ -677,6 +825,18 @@ class WikitextConverter:
         contents = getattr(node, "contents", None)
         table_source = str(contents) if contents else ""
 
+        # Simplify any remaining wikilinks *inside the table only*. This removes
+        # | from [[Target|Display]] so the pipe-table cell parser isn't confused,
+        # while leaving normal body wikilinks intact for proper internal linking.
+        def _simplify_links_in_fragment(s: str) -> str:
+            def simp(m):
+                tgt = m.group(1).strip()
+                disp = m.group(2).strip() if m.group(2) else tgt.replace("_", " ")
+                return disp
+            return re.sub(r'\[\[([^\|\]]+?)(?:\|([^\]]+?))?\]\]', simp, s)
+
+        table_source = _simplify_links_in_fragment(table_source)
+
         cls = ""
         if node.has("class"):
             try:
@@ -706,11 +866,10 @@ class WikitextConverter:
     def _render_pipe_table(self, source: str, base_attrs: str = "") -> str:
         """Lightweight but effective parser for wikitext pipe tables.
 
-        Handles:
-        - rowspan / colspan on cells
-        - templates inside cells
-        - embedded raw HTML garbage
-        - table captions via the |+ line
+        Row boundaries are trivial: a MediaWiki table always uses |- between rows.
+        We accumulate cells into the current row until we see |- (flush + new row)
+        or |} (flush + end). No column-count heuristics, no early flushes.
+        The only real ambiguity is attributes | content splitting on cell lines.
         """
         lines = source.splitlines()
         rows_html: list[str] = []
@@ -723,22 +882,25 @@ class WikitextConverter:
                 rows_html.append("<tr>" + "".join(current_row_cells) + "</tr>")
             current_row_cells = []
 
+        def _ws_only(s: str) -> bool:
+            return not s or all(c.isspace() for c in s)
+
         i = 0
         n = len(lines)
         while i < n:
             line = lines[i].rstrip()
-            stripped = line.strip()
+            deindented = line.lstrip()
 
-            if stripped.startswith("{|"):
+            if deindented.startswith("{|"):
                 i += 1
                 continue
-            if stripped.startswith("|}"):
+            if deindented.startswith("|}"):
                 flush_row()
                 break
 
             # Table caption: |+ Caption text (can contain templates)
-            if stripped.startswith("|+"):
-                cap_text = stripped[2:].strip()
+            if deindented.startswith("|+"):
+                cap_text = deindented[2:].strip()
                 try:
                     cap_rendered = "".join(self._render(n) for n in mwp.parse(cap_text).nodes)
                 except Exception:
@@ -747,52 +909,31 @@ class WikitextConverter:
                 i += 1
                 continue
 
-            if stripped.startswith("|-"):
+            if deindented.startswith("|-"):
                 flush_row()
                 i += 1
                 continue
 
-            if stripped.startswith(("|", "!")):
-                is_header = stripped.startswith("!")
-                # Remove leading | or !
-                rest = stripped[1:].lstrip()
+            if deindented.startswith(("|", "!")):
+                is_header = deindented.startswith("!")
+                # Everything after the opening | or ! (preserve ws for ws-only blank cells)
+                after_leader = deindented[1:]
+                if is_header:
+                    after_leader = after_leader.replace('!!', '||')
 
-                # Always split on || for structural cells.
-                # We now rely on good cell-content recovery (unescape + reparse) to preserve tags inside cells.
-                cell_starts = re.split(r'\|\|', rest)
-                for cell_start in cell_starts:
-                    cell_start = cell_start.strip()
-                    if not cell_start:
+                cell_specs = re.split(r'\|\|', after_leader)
+
+                for raw_spec in cell_specs:
+                    if _ws_only(raw_spec):
+                        # Blank cell written as |   or |  &nbsp; or |  \xa0 etc. (one-cell-per-line style)
+                        current_row_cells.append(self._parse_pipe_cell("", is_header=is_header))
                         continue
 
-                    # Strip common MediaWiki table attribute prefixes that sometimes leak (e.g. scope="col" | )
-                    cell_start = re.sub(r'^(?:(?:rowspan|colspan|scope)\s*=\s*["\']?[^"\']+["\']?\s*\|\s*)+', '', cell_start, flags=re.I)
-
-                    # Key improvement: If this chunk already contains HTML tags, do NOT split it further on |.
-                    # Feed the whole thing to the parser so Tag nodes are created instead of text that later gets escaped.
-                    if '<' in cell_start and '>' in cell_start:
-                        # Treat the entire HTML-heavy chunk as content (no separate attrs)
-                        cell_html = self._parse_pipe_cell(cell_start, is_header=is_header)
-                        current_row_cells.append(cell_html)
-                        continue
-
-                    # Normal path for plain wikitext cells
-                    attrs_part = ""
-                    content_part = cell_start
-                    if re.search(r'(?i)(rowspan|colspan|scope)\s*=', cell_start):
-                        m = re.search(r'^(.*?(?:rowspan|colspan|scope)\s*=\s*["\']?[^"\']+["\']?.*?)\s*\|\s*(.*)$', cell_start, re.DOTALL | re.I)
-                        if m:
-                            attrs_part = m.group(1).strip()
-                            content_part = m.group(2).strip()
-                    else:
-                        m = re.search(r'^(.*?)\s*\|\s*(.*)$', cell_start, re.DOTALL)
-                        if m:
-                            attrs_part = m.group(1).strip()
-                            content_part = m.group(2).strip()
-
-                    cell_text = f"{attrs_part} | {content_part}" if attrs_part else content_part
-                    cell_html = self._parse_pipe_cell(cell_text, is_header=is_header)
-                    current_row_cells.append(cell_html)
+                    # Hand the spec (with its internal | for attrs if present) to the cell parser.
+                    # After early template/link expansion, any | here is either structural || (already split)
+                    # or the attrs | content separator the user described.
+                    spec = raw_spec.strip()
+                    current_row_cells.append(self._parse_pipe_cell(spec, is_header=is_header))
 
                 i += 1
                 continue
@@ -804,57 +945,59 @@ class WikitextConverter:
         table_content = "\n".join(rows_html)
         return f"<table{base_attrs}>\n{caption_html}<tbody>\n{table_content}\n</tbody>\n</table>"
 
-    def _parse_pipe_cell(self, cell_text: str, is_header: bool = False) -> str:
-        """Parse one cell string (after the initial | or ! has been stripped).
-
-        Very defensive version for the ugly tables in Path_1 / Path_28.
+    def _parse_pipe_cell(self, cell_spec: str, is_header: bool = False) -> str:
         """
-        attrs_part = ""
-        content_part = cell_text.strip()
+        Parse one cell spec (plain content, or "attributes | content" per MediaWiki).
 
-        # If this cell has explicit rowspan/colspan, split on the first | after them.
-        if re.search(r'(?i)(rowspan|colspan)\s*=', content_part):
-            m = re.search(r'^(.*?(?:rowspan|colspan)\s*=\s*["\']?\d+["\']?.*?)\s*\|\s*(.*)$', content_part, re.DOTALL | re.I)
-            if m:
-                attrs_part = m.group(1).strip()
-                content_part = m.group(2).strip()
-        else:
-            # No rowspan/colspan — if the line starts with {{ or normal text right after the leading |,
-            # the entire thing (after the first real content | if any) is content.
-            # For safety, only split if we see a " | " that looks like it separates attrs.
-            if re.match(r'^\s*(?:\{\{|[\w<])', content_part):
-                # Treat whole thing as content (common case for first cells in Path_1 table)
-                pass
-            else:
-                m = re.search(r'^(.*?)\s*\|\s*(.*)$', content_part, re.DOTALL)
-                if m:
-                    attrs_part = m.group(1).strip()
-                    content_part = m.group(2).strip()
+        This is the single place that resolves the only real ambiguity the user
+        identified: attribute prefix before the | vs. plain cell text.
+        After _pre_expand_templates_and_links, remaining | are reliable signals.
+        """
+        spec = (cell_spec or "").strip()
+        attrs_part = ""
+        content_part = spec
+
+        if '|' in spec:
+            protected = re.sub(r'\[\[[^\]]+\]\]', lambda m: '\x00LINK\x00' + m.group(0) + '\x00', spec)
+            if '|' in protected:
+                left, right = protected.split('|', 1)
+                left_c = left.replace('\x00LINK\x00', '').replace('\x00', '').strip()
+                right_c = right.replace('\x00LINK\x00', '').replace('\x00', '').strip()
+                # The decision: left side is attributes iff it has = or a known table attr keyword.
+                # This correctly handles: colspan="4" | text , rowspan="2" | text , and bare | content.
+                if '=' in left_c or re.search(r'(?i)^\s*(rowspan|colspan|scope|class|style|align|valign|id|headers)\b', left_c):
+                    attrs_part = left_c
+                    content_part = right_c
 
         rowspan = ""
         colspan = ""
-        rs = re.search(r'rowspan\s*=\s*["\']?(\d+)', attrs_part, re.I)
-        if rs:
-            rowspan = f' rowspan="{rs.group(1)}"'
-        cs = re.search(r'colspan\s*=\s*["\']?(\d+)', attrs_part, re.I)
-        if cs:
-            colspan = f' colspan="{cs.group(1)}"'
+        if attrs_part:
+            rs = re.search(r'rowspan\s*=\s*["\']?(\d+)', attrs_part, re.I)
+            if rs:
+                rowspan = f' rowspan="{rs.group(1)}"'
+            cs = re.search(r'colspan\s*=\s*["\']?(\d+)', attrs_part, re.I)
+            if cs:
+                colspan = f' colspan="{cs.group(1)}"'
 
         tag = "th" if is_header else "td"
 
-        clean_content = self._clean_cell_garbage_raw(content_part)
-        clean_content = self._normalize_entities(clean_content)
+        clean = self._clean_cell_garbage_raw(content_part)
+        clean = self._normalize_entities(clean)
+        clean = html.unescape(clean)
 
-        # Critical for files like Gimel: unescape any HTML that arrived as entities
-        # so mwparserfromhell can turn it into real Tag nodes instead of text.
-        clean_content = html.unescape(clean_content)
+        if not clean or all(c.isspace() for c in clean):
+            rendered = "&#160;"
+        else:
+            try:
+                parsed_cell = mwp.parse(clean)
+                rendered = "".join(self._render(n) for n in parsed_cell.nodes)
+            except Exception as e:
+                log.debug("Cell parse failed: %s", e)
+                rendered = html.escape(clean)
 
-        try:
-            parsed_cell = mwp.parse(clean_content)
-            rendered = "".join(self._render(n) for n in parsed_cell.nodes)
-        except Exception as e:
-            log.debug("Cell parse failed: %s", e)
-            rendered = html.escape(clean_content)
+        # Final safety: any cell whose rendered content is empty or nbsp must be &#160;
+        if not rendered or not rendered.strip() or rendered.strip() in ('&nbsp;', ' ', '\xa0', '&#160;'):
+            rendered = '&#160;'
 
         return f"<{tag}{rowspan}{colspan}>{rendered}</{tag}>"
 
@@ -893,6 +1036,7 @@ class WikitextConverter:
         # Common ones that leak from wikitext
         '&laquo;': '&#171;',
         '&raquo;': '&#187;',
+        '&times;': '&#215;',
     }
 
     def _normalize_entities(self, text: str) -> str:
@@ -1224,15 +1368,91 @@ class WikitextConverter:
 
 
 def run_stage2(*, workdir: Path, force: bool = False) -> None:
-    """Real entry point (still being filled in).
+    """Convert downloaded chapter wikitext into clean XHTML.
 
-    For the current development phase this is mostly a no-op that tells you
-    the machinery exists. Real usage right now is via the WikitextConverter
-    class directly (see the if __name__ block or import it from Python).
+    This is the real implementation used when running with a workdir.
+    It reads metadata.json, converts every chapter's wikitext from
+    downloads/chapters/, and writes the results to xhtml/.
     """
-    log.info("Stage 2 (convert) — WikitextConverter is ready for use")
-    if not (workdir / "metadata.json").exists():
-        log.info("Tip: run with --stages 1 first, or use the converter directly on example files.")
+    log.info("Stage 2: Converting wikitext → XHTML")
+
+    meta_path = workdir / "metadata.json"
+    if not meta_path.exists():
+        raise FileNotFoundError(
+            f"metadata.json not found in {workdir}. "
+            "You must run Stage 1 first (or --start-from 1)."
+        )
+
+    meta = BookMetadata.from_json(meta_path)
+
+    downloads = workdir / "downloads"
+    chapters_dir = downloads / "chapters"
+    xhtml_dir = workdir / "xhtml"
+    xhtml_dir.mkdir(parents=True, exist_ok=True)
+
+    images_root = downloads / "images"
+    if not images_root.exists():
+        images_root = None
+
+    page_to_xhtml = {ch.page_title: ch.xhtml_filename for ch in meta.chapters}
+    page_to_display = {ch.page_title: ch.display_title for ch in meta.chapters}
+
+    ctx = ConversionContext(
+        book_pages=set(page_to_xhtml.keys()),
+        page_to_xhtml=page_to_xhtml,
+        page_to_display=page_to_display,
+        images_root=images_root,
+        workdir=workdir,
+        emit_title_h1=True,
+        cover_image=meta.cover_image,
+    )
+    conv = WikitextConverter(ctx)
+
+    converted = 0
+    skipped = 0
+
+    for ch in meta.chapters:
+        # Stage 1 stores chapters as page_title with spaces → underscores
+        wikitext_name = ch.page_title.replace(" ", "_") + ".wikitext"
+        wikitext_path = chapters_dir / wikitext_name
+
+        out_path = xhtml_dir / ch.xhtml_filename
+
+        if not force and out_path.exists():
+            log.info("  Skipping (already exists): %s", ch.xhtml_filename)
+            skipped += 1
+            continue
+
+        if not wikitext_path.exists():
+            log.warning("  Missing source wikitext for %s (looked for %s)",
+                        ch.page_title, wikitext_name)
+            skipped += 1
+            continue
+
+        log.info("  Converting: %s → %s", ch.page_title, ch.xhtml_filename)
+        try:
+            xhtml = conv.convert_file(wikitext_path, ch.page_title)
+            out_path.write_text(xhtml, encoding="utf-8")
+            converted += 1
+        except Exception as e:
+            log.exception("  FAILED to convert %s: %s", ch.page_title, e)
+            skipped += 1
+
+    log.info("Stage 2 complete: %d chapters converted, %d skipped", converted, skipped)
+
+    if converted == 0:
+        log.error(
+            "Stage 2 produced ZERO XHTML files!\n"
+            "  - Looked for source wikitext in: %s\n"
+            "  - Expected naming: page_title with spaces → underscores + .wikitext\n"
+            "  - Output directory: %s\n"
+            "Check the warnings above and the contents of the chapters directory.",
+            chapters_dir, xhtml_dir
+        )
+
+    # Ensure an editable toc.json exists for Stage 3 (even on --start-from 2 restarts).
+    toc_wikitext_path = downloads / "toc.wikitext"
+    ensure_toc_json(workdir, meta.chapters, toc_wikitext_path, force=force)
 
 
 # ---------------------------------------------------------------------- #

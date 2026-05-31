@@ -18,6 +18,12 @@ class ConversionContext:
     # Set of page titles (original, with underscores or spaces) that belong to this book.
     book_pages: set[str] = field(default_factory=set)
 
+    # Rich mappings from the authoritative ChapterInfo list (populated in run_stage2).
+    # These let us emit the nice TOC-derived <h1> and turn [[Wiki Page Title]] into
+    # correct <a href="003_Nice_Title.xhtml"> links for internal book pages.
+    page_to_xhtml: dict[str, str] = field(default_factory=dict)   # page_title → "003_Foo.xhtml"
+    page_to_display: dict[str, str] = field(default_factory=dict) # page_title → "Foo (nice TOC title)"
+
     # Mapping from original File: name → chosen filename to use in the EPUB
     image_map: dict[str, str] = field(default_factory=dict)
 

@@ -14,6 +14,9 @@ from typing import Sequence
 
 from rwt_epub import EpubWriter
 
+from .models import BookMetadata
+from .toc import load_toc_json
+
 log = logging.getLogger(__name__)
 
 
@@ -42,6 +45,67 @@ def run_stage3(
     """
     if output is None:
         output = Path("mwbook_test.epub")
+
+    # Workdir mode support
+    if workdir:
+        meta_path = workdir / "metadata.json"
+        xhtml_dir = workdir / "xhtml"
+
+        if not chapters:
+            if xhtml_dir.exists():
+                chapters = sorted(xhtml_dir.glob("*.xhtml"))
+                if chapters:
+                    log.info("Discovered %d chapters from workdir: %s", len(chapters), xhtml_dir)
+
+        # If still no chapters, give a clear actionable error instead of the generic one
+        if not chapters:
+            if not meta_path.exists():
+                raise ValueError(
+                    f"No metadata.json found in {workdir}. "
+                    "Run with --stages 1 (or --start-from 1) first."
+                )
+            try:
+                meta = BookMetadata.from_json(meta_path)
+                expected = [ch.xhtml_filename for ch in meta.chapters]
+            except Exception:
+                expected = []
+
+            # Extra diagnostics: show what actually exists in downloads/chapters
+            chapters_dir = workdir / "downloads" / "chapters"
+            existing_sources = []
+            if chapters_dir.exists():
+                existing_sources = sorted([p.name for p in chapters_dir.iterdir() if p.is_file()])
+
+            msg = (
+                f"No XHTML chapters found in {xhtml_dir}.\n"
+                f"Expected files (from metadata): {expected}\n\n"
+                f"Chapter sources present in {chapters_dir}: {existing_sources}\n\n"
+                "To regenerate the XHTML files, run:\n"
+                f"  uv run mwbook-to-epub --workdir {workdir} --start-from 2 -v\n\n"
+                "Then re-run Stage 3 (or use --start-from 2 again)."
+            )
+            raise ValueError(msg)
+
+        # Auto-discover images directory if not provided
+        if images_dir is None:
+            candidate = workdir / "downloads" / "images"
+            if candidate.exists():
+                images_dir = candidate
+            else:
+                candidate = workdir / "images"
+                if candidate.exists():
+                    images_dir = candidate
+
+        # Auto-discover cover from metadata if not provided
+        if cover_image is None and meta_path.exists():
+            try:
+                meta = BookMetadata.from_json(meta_path)
+                if meta.cover_image and images_dir:
+                    candidate = images_dir / meta.cover_image
+                    if candidate.exists():
+                        cover_image = candidate
+            except Exception:
+                pass
 
     if not chapters:
         raise ValueError("No chapters provided to Stage 3")
@@ -95,6 +159,19 @@ def run_stage3(
 
             w.add_xhtml_body(chap_path.name, xhtml, title=chap_title)
             log.info("Added chapter %d: %s", i, chap_path.name)
+
+        # Optional custom TOC (produced by Stage 1, editable by user before Stage 3).
+        # Uses xhtml filenames so rwt_epub can resolve them directly.
+        if workdir:
+            toc_path = workdir / "toc.json"
+            if toc_path.exists():
+                try:
+                    toc_entries = load_toc_json(toc_path)
+                    for e in toc_entries:
+                        w.add_toc_entry(e["title"], e["src"], level=e.get("level", 1))
+                    log.info("Applied custom TOC (%d entries, up to level 3)", len(toc_entries))
+                except Exception as exc:
+                    log.warning("Failed to load/apply %s: %s (proceeding without custom TOC)", toc_path, exc)
 
     log.info("EPUB successfully written: %s", output)
     return output

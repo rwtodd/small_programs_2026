@@ -1,21 +1,23 @@
 """Stage 1: Fetch TOC + chapters + images (restartable / incremental).
 
-For the initial slice we only implement the pure offline --toc-file path
-using mwparserfromhell. Network paths and image download are stubbed but
-the metadata layout is written so later stages have something to work with.
+Supports both offline (--toc-file) and live wiki (--toc-page + --creds) modes.
+Uses rwt_wikiapi for network access.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shutil
 from pathlib import Path
 
 import mwparserfromhell as mwp
+from rwt_wikiapi import Client
 
-from .models import BookMetadata, ChapterInfo
-from .utils import strip_last_parenthetical, safe_filename
+from .models import BookMetadata, ChapterInfo, ImageInfo
+from .toc import ensure_toc_json
+from .utils import strip_last_parenthetical, safe_filename, run_magick_identify
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +64,43 @@ def _collect_chapters_from_toc(parsed: mwp.wikicode.Wikicode) -> list[tuple[str,
     return uniq
 
 
+def _extract_media_names(text: str) -> set[str]:
+    """Extract unique media file names from wikitext (File:, Image:, Media:, and <gallery>)."""
+    names: set[str] = set()
+
+    # [[File:Foo.jpg|options]]
+    # [[Image:Foo.jpg]]
+    # [[Media:Foo.jpg|...]]
+    for m in re.finditer(r'\[\[(?:File|Image|Media):([^\]|]+)', text, re.IGNORECASE):
+        name = m.group(1).strip()
+        if name:
+            names.add(name)
+
+    # <gallery>
+    # File:Foo.jpg|Caption
+    # Bar.png
+    # </gallery>
+    for gm in re.finditer(r'<gallery[^>]*>(.*?)</gallery>', text, re.IGNORECASE | re.DOTALL):
+        gallery_content = gm.group(1)
+        for line in gallery_content.splitlines():
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            # Remove options after |
+            if '|' in line:
+                line = line.split('|', 1)[0]
+            # Strip File:/Image: prefix if present
+            if ':' in line:
+                prefix, rest = line.split(':', 1)
+                if prefix.lower() in ('file', 'image'):
+                    line = rest
+            name = line.strip()
+            if name:
+                names.add(name)
+
+    return names
+
+
 def run_stage1(
     *,
     workdir: Path,
@@ -70,33 +109,69 @@ def run_stage1(
     toc_page: str | None,
     force: bool,
 ) -> None:
-    """Entry point for stage 1. Only the offline toc_file path is live for v0.1 slice."""
-    log.info("Stage 1 starting (offline slice)")
+    """Entry point for stage 1. Supports both offline --toc-file and live --toc-page.
+
+    The workdir is made self-contained:
+    - Any TOC provided via --toc-file (even from outside the workdir) or --toc-page
+      is materialized as <workdir>/downloads/toc.wikitext.
+    - On subsequent runs you can omit --toc-file / --toc-page entirely; Stage 1 will
+      automatically reuse the cached copy from the workdir.
+    """
+    log.info("Stage 1 starting")
 
     downloads = workdir / "downloads"
     chapters_dir = downloads / "chapters"
     chapters_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = downloads / "images"   # we'll use this for originals before any conversion decisions
+    images_dir.mkdir(parents=True, exist_ok=True)
 
+    canonical_toc = downloads / "toc.wikitext"
+
+    src_text: str
+
+    # Live fetch takes precedence
     if toc_page:
         if not creds:
             raise RuntimeError("toc_page requires credentials (use --creds)")
-        log.info("Would fetch TOC page '%s' via rwt_wikiapi (not implemented in this slice)", toc_page)
-        # In a later slice we would do:
-        # with Client.session(...) as c: text = c.fetch_wikitext(toc_page)
-        # For now we error so the user knows the boundary.
-        raise NotImplementedError("Live wiki fetch for --toc-page is not yet wired (use --toc-file for the initial slice)")
+
+        base_url = creds["base_url"]
+        username = creds["username"]
+        password = creds["password"]
+
+        log.info("Fetching TOC page '%s' from %s", toc_page, base_url)
+
+        with Client.session(base_url, username, password) as client:
+            src_text = client.fetch_wikitext(toc_page)
+
+        canonical_toc.write_text(src_text, encoding="utf-8")
+        log.info("Saved TOC to %s", canonical_toc)
+        toc_file = canonical_toc
+
+    # Auto-discover cached TOC from previous run if nothing was explicitly provided
+    if not toc_file and canonical_toc.exists():
+        toc_file = canonical_toc
+        log.info("Reusing existing TOC from workdir: %s", canonical_toc)
 
     if not toc_file:
-        raise ValueError("--toc-file is required for the offline slice")
+        raise ValueError(
+            "--toc-file or --toc-page is required for Stage 1.\n"
+            "Alternatively, run from a workdir that already contains downloads/toc.wikitext "
+            "(created by a previous Stage 1 run)."
+        )
+
     if not toc_file.exists():
         raise FileNotFoundError(f"TOC file not found: {toc_file}")
 
+    # Read the source (this may be an external file the user pointed at)
     src_text = toc_file.read_text(encoding="utf-8")
+
     header = _parse_header_comments(src_text)
     log.info("Header metadata: %s", header)
 
     parsed = mwp.parse(src_text)
     raw_chapters = _collect_chapters_from_toc(parsed)
+
+    all_media: set[str] = set()
 
     # Build ChapterInfo list.
     # Prefer the link text from the TOC (e.g. "Path of Kether" instead of "Path 1 (32 Paths PFC)")
@@ -168,15 +243,100 @@ def run_stage1(
         )
     log.info("Found %d chapters from lists in TOC", len(chapter_infos))
 
-    # Copy the TOC into the workdir (immutable source of truth)
-    toc_dest = downloads / "toc.wikitext"
-    if force or not toc_dest.exists():
-        shutil.copy2(toc_file, toc_dest)
-        log.info("Copied TOC to %s", toc_dest)
+    is_live_fetch = toc_page is not None
 
-    # For this slice we do *not* have the actual chapter wikitext files yet.
-    # We still write the metadata so the restart story is visible.
-    # Later slices (when user supplies chapter examples) will populate downloads/chapters/.
+    # Discover media references from the TOC we just parsed
+    all_media.update(_extract_media_names(src_text))
+
+    # Also scan any chapter files that already exist on disk (helpful for both live and offline)
+    for ch in chapter_infos:
+        ch_path = chapters_dir / (ch.page_title.replace(" ", "_") + ".wikitext")
+        if ch_path.exists():
+            try:
+                ch_text = ch_path.read_text(encoding="utf-8")
+                all_media.update(_extract_media_names(ch_text))
+            except Exception:
+                pass
+
+    # --- Live download of chapter wikitext (and all referenced media) ---
+    if is_live_fetch:
+        base_url = creds["base_url"]  # type: ignore[index]
+        username = creds["username"]  # type: ignore[index]
+        password = creds["password"]  # type: ignore[index]
+
+        with Client.session(base_url, username, password) as client:
+            for ch in chapter_infos:
+                target = chapters_dir / (ch.page_title.replace(" ", "_") + ".wikitext")
+                if force or not target.exists():
+                    log.info("Fetching chapter: %s", ch.page_title)
+                    try:
+                        text = client.fetch_wikitext(ch.page_title)
+                        target.write_text(text, encoding="utf-8")
+                    except Exception as e:
+                        log.warning("Failed to fetch %s: %s", ch.page_title, e)
+                        target.write_text(f"; ERROR fetching this page: {e}\n", encoding="utf-8")
+                else:
+                    log.debug("Chapter already present: %s", ch.page_title)
+
+            # Download the cover image if we detected one
+            if cover:
+                cover_dest = images_dir / cover
+                if force or not cover_dest.exists():
+                    log.info("Downloading cover image: %s", cover)
+                    try:
+                        data = client.fetch_media(cover)
+                        cover_dest.write_bytes(data)
+                    except Exception as e:
+                        log.warning("Failed to download cover image %s: %s", cover, e)
+                else:
+                    log.debug("Cover image already present: %s", cover)
+
+            # Download all discovered media files (cover was already handled above)
+            for media_name in sorted(all_media):
+                if media_name == cover:
+                    continue
+                dest = images_dir / media_name
+                if force or not dest.exists():
+                    log.info("Downloading media: %s", media_name)
+                    try:
+                        data = client.fetch_media(media_name)
+                        dest.write_bytes(data)
+                    except Exception as e:
+                        log.warning("Failed to download media %s: %s", media_name, e)
+                else:
+                    log.debug("Media already present: %s", media_name)
+
+    # Ensure the workdir always contains a canonical copy of the TOC.
+    # This makes the workdir fully self-contained and restartable.
+    # - For live fetches: already written directly above.
+    # - For external --toc-file (or restart using the cached one): make sure
+    #   downloads/toc.wikitext exists and reflects what was used.
+    toc_dest = downloads / "toc.wikitext"
+    if toc_file != toc_dest:
+        # The source was an external file the user pointed at (or a previous cached copy
+        # that we want to keep as the canonical one).
+        if force or not toc_dest.exists():
+            shutil.copy2(toc_file, toc_dest)
+            log.info("Materialized TOC into workdir: %s", toc_dest)
+        elif toc_file != toc_dest and toc_dest.exists():
+            # On non-force restart using an external file that differs, we still prefer
+            # to keep the existing canonical copy (user may have edited it), but we log.
+            log.debug("Using existing canonical TOC %s (external source %s not re-copied without --force)", toc_dest, toc_file)
+
+    # Build ImageInfo entries for everything we downloaded in this run
+    images_dict: dict[str, ImageInfo] = {}
+    for name in sorted(all_media):
+        images_dict[name] = ImageInfo(
+            original_name=name,
+            chosen_local=name,
+            media_type="image/jpeg" if name.lower().endswith(('.jpg', '.jpeg')) else "image/png",
+        )
+    if cover and cover not in images_dict:
+        images_dict[cover] = ImageInfo(
+            original_name=cover,
+            chosen_local=cover,
+            media_type="image/jpeg" if cover.lower().endswith(('.jpg', '.jpeg')) else "image/png",
+        )
 
     meta = BookMetadata(
         book_title=header.get("title", "Untitled Book"),
@@ -185,6 +345,7 @@ def run_stage1(
         toc_page_title=header.get("title"),
         chapters=chapter_infos,
         cover_image=cover,
+        images=images_dict,
         created_from=str(toc_file),
     )
 
@@ -196,11 +357,9 @@ def run_stage1(
     else:
         log.info("After editing 'cover_image' in metadata.json, re-run with --stages 3 (or --start-from 3)")
 
-    # Create stub chapter wikitext placeholders so the directory layout is complete
-    # (real content will overwrite when we have the files or do network fetch).
-    for ch in chapter_infos:
-        stub = chapters_dir / (ch.page_title.replace(" ", "_") + ".wikitext")
-        if not stub.exists():
-            stub.write_text(f"; placeholder for {ch.page_title}\n", encoding="utf-8")
+    # --- Generate editable TOC JSON (for rwt_epub) --------------------------------
+    # Uses the canonical downloads/toc.wikitext we just materialized.
+    toc_wikitext_path = downloads / "toc.wikitext"
+    ensure_toc_json(workdir, chapter_infos, toc_wikitext_path, force=force)
 
-    log.info("Stage 1 complete (offline slice). metadata + downloads/ layout ready for stage 2/3 experiments.")
+    log.info("Stage 1 complete. metadata + downloads/ layout ready for stage 2/3.")

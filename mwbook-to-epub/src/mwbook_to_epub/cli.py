@@ -46,7 +46,11 @@ def _setup_logging(verbose: bool) -> None:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="mwbook-to-epub",
-        description="Convert a MediaWiki book (TOC page + chapters in wikitext) to EPUB 3.3",
+        description=(
+            "Convert a MediaWiki book (TOC page + chapters in wikitext) to EPUB 3.3.\n"
+            "Stage 1 produces an editable toc.json (with up to 3 levels of nesting derived\n"
+            "from the wiki list structure) that you can tweak before Stage 3."
+        ),
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
@@ -65,11 +69,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--toc-file",
         type=Path,
-        help="Local wikitext file containing the book's TOC page (for offline use)",
+        help="Local wikitext file containing the book's TOC page (for offline use). "
+             "Stage 1 will copy it into the workdir as downloads/toc.wikitext so future "
+             "runs can omit this flag.",
     )
     parser.add_argument(
         "--toc-page",
-        help="Page title on the wiki to use as the TOC (will be fetched via API)",
+        help="Page title on the wiki to use as the TOC (will be fetched via API). "
+             "The fetched content is saved to downloads/toc.wikitext for restarts.",
     )
     parser.add_argument(
         "--stages",
@@ -115,15 +122,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.toc_file and args.toc_page:
         parser.error("--toc-file and --toc-page are mutually exclusive")
 
-    creds = None
-    needs_creds = bool(args.toc_page) or (1 in stages and not args.toc_file)
-    if needs_creds:
-        creds = _read_credentials(args.creds)
-        log.debug("Credentials loaded for %s", creds["base_url"])
-
     workdir = args.workdir or Path.cwd() / "mwbook_work"
     workdir.mkdir(parents=True, exist_ok=True)
     log.info("Workdir: %s", workdir)
+
+    creds = None
+    needs_creds = bool(args.toc_page)
+    if needs_creds:
+        creds = _read_credentials(args.creds)
+        log.debug("Credentials loaded for %s", creds["base_url"])
 
     # Dispatch to stages (they are responsible for being restartable / incremental)
     from . import stage1, stage2, stage3
