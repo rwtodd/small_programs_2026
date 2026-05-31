@@ -1,0 +1,62 @@
+{{Generic WikiBook Nav
+|1 = 32 Paths of Wisdom
+|2 = [[32 Paths of Wisdom (PF Case)|Table of Contents]]
+|3 = [[Path 1 (32 Paths PFC)|Path 1]]
+|4 = [[Path 3 (32 Paths PFC)|Path 3]]
+}}
+'''Radiant Intelligence'''
+
+{| class="wikitable"
+|-
+|  Path
+|  The “2”
+|  It
+|  is called
+|-
+|   
+|  second
+|   
+|   
+|-
+| colspan="4"  |   &nbsp;
+|-
+|  Intelligence
+|  Radiant
+|   
+|  Crown
+|-
+|   
+|  Illumination
+|   
+|   
+|-
+| &nbsp;
+| &nbsp;
+| &nbsp;
+| &nbsp;
+|-
+|  is called
+|  by
+| rowspan="2"  |  Masters of </p> <p class="calibre5"> (Kabbalists)
+|  the receive
+|-
+|  {{Hebrew text|&#x05db;&#x05d1;&#x05d5;&#x05d3;}}
+|  {{Hebrew text|&#x05e9;&#x05e0;&#x05d9;}}
+| colspan="2" rowspan="2"  |   
+|-
+|  glory
+|  second
+|}
+
+==  Sphere of the Zodiac - Masloth  ==
+
+The second Sephirah, Chokmah, is the Sphere of the Zodiac, or fixed stars. In the ''Lesser Holy Assembly''<ref name="ch201" />, from Chokmah comes ''mezla'' ({{Hebrew text|&#x05de;&#x05d6;&#x05dc;&#x05d0;}}), plural ''masloth''({{Hebrew text|&#x05de;&#x05d6;&#x05dc;&#x05d5;&#x05ea;}}), to refer to the order and arrangement of the constellations or zodiac, Galgal ha-Masloth ({{Hebrew text|&#x05d2;&#x05dc;&#x05d2;&#x05dc; &#x05d4;-&#x05de;&#x05d6;&#x05dc;&#x05d5;&#x05ea;}}). [Hebrew doesn’t use hypens. I added here to clarify the Heh ({{Hebrew text|&#x05d4;}}) means “the.”]
+
+==  Notes  ==
+
+<references>
+<ref name="ch201">Kabbala Unveiled, Lesser Holy Assembly, Chapter 18: '''651.''' But this arrangement is not found in the Most Holy Ancient One. But when that fountain of Wisdom, ''Chokmatha'', flows down from ''Mezla'', the Influence of the Most Holy Ancient One, descends from Him. (the previous sentence doesn’t read well grammatically: When Aima, the Mother, arises and is included in that subtle ether, then She, Aima, assumes that white brilliance. P. 325)</ref>
+</references>
+
+&rarr; [[Path 3 (32 Paths PFC)|Path of Binah]] &rarr;
+[[Category:32 Paths of Wisdom (PF Case)]]
