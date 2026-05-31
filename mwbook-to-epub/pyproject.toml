@@ -1,0 +1,31 @@
+[build-system]
+requires = ["uv_build>=0.11.17,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "mwbook-to-epub"
+version = "0.1.0"
+description = "Convert MediaWiki-formatted books (wikitext TOC + chapters) to EPUB 3.3"
+readme = "README.md"
+requires-python = ">=3.14"
+authors = [{ name = "Richard Todd" }]
+license = { text = "MIT" }
+dependencies = [
+    "mwparserfromhell>=0.6.6",
+    "rwt-wikiapi",
+    "rwt-epub",
+]
+
+[project.scripts]
+mwbook-to-epub = "mwbook_to_epub.cli:main"
+
+[project.urls]
+Repository = "https://github.com/rwtodd/small_programs_2026/tree/main/mwbook-to-epub"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "mwbook_to_epub"
+
+[tool.uv.sources]
+rwt-wikiapi = { path = "../../small_python_packages/wikiapi" }
+rwt-epub = { path = "../../small_python_packages/epub" }

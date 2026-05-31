@@ -1,0 +1,9 @@
+A Paragraph
+
+; Term1: Def1
+; Term2: Def2
+; Term3
+: Def3a
+: Def3b
+
+Another Paragraph

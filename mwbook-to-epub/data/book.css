@@ -1,0 +1,148 @@
+/* mwbook-to-epub default stylesheet - tuned for EPUB 3 readers */
+
+body {
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.5;
+  margin: 0 1em;
+  font-size: 1em;
+}
+
+/* Headings */
+h1 { font-size: 1.6em; margin-top: 1.2em; margin-bottom: 0.6em; }
+h2 { font-size: 1.35em; margin-top: 1.1em; margin-bottom: 0.5em; }
+h3 { font-size: 1.15em; margin-top: 1em; margin-bottom: 0.4em; }
+
+/* Hebrew text - user prefers class over inline style */
+.hebrew-text {
+  font-family: "Times New Roman", times, serif;
+  font-size: 150%;
+  line-height: 100%;
+}
+
+/* Jesus words */
+.rwtjesustxt {
+  color: #1a5276; /* nice blue in light mode; readers can override */
+}
+
+/* Centered content */
+.center {
+  text-align: center;
+  width: auto;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Image handling - responsive as per spec */
+.book-image {
+  margin: 0.8em 0;
+  max-width: 100%;
+  height: auto;
+}
+
+.img-center {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+  text-align: center;
+  width: 90%;
+}
+
+.img-left,
+.img-right {
+  max-width: 50%;
+  margin: 0.5em;
+}
+
+@media (max-width: 600px) {
+  .img-left,
+  .img-right {
+    max-width: 92%;
+    float: none !important;
+    display: block;
+    margin: 0.8em auto;
+  }
+}
+
+.img-left  { float: left;  margin-left: 0; }
+.img-right { float: right; margin-right: 0; }
+
+figcaption {
+  font-size: 0.85em;
+  font-style: italic;
+  margin-top: 0.3em;
+  color: #444;
+}
+
+/* Image gallery (from <gallery>) */
+.image-gallery {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1em;
+  margin: 1em 0;
+}
+
+/* Wikitable styling */
+table.wikitable {
+  border-collapse: collapse;
+  margin: 1em 0;
+  width: 100%;
+  font-size: 0.95em;
+}
+
+table.wikitable th,
+table.wikitable td {
+  border: 1px solid #888;
+  padding: 0.4em 0.6em;
+  vertical-align: top;
+}
+
+table.wikitable th {
+  background: #f0f0f0;
+  font-weight: bold;
+}
+
+/* Collapsible / Q&A style (from mw-collapsible) */
+.rwt-qa {
+  margin-bottom: 0.8em;
+  padding: 0.5em;
+  border: 1px solid #aaa;
+  border-radius: 3px;
+  cursor: pointer;
+  background: #fafafa;
+}
+
+.rwt-qa > p {
+  opacity: 0.35;
+  transition: opacity 0.4s ease;
+  margin: 0.3em 0;
+}
+
+.rwt-qa.rwtShown > p,
+.rwt-qa:hover > p {
+  opacity: 1;
+}
+
+/* Blockquotes and emphasis */
+blockquote {
+  margin: 1em 1.5em;
+  padding-left: 1em;
+  border-left: 3px solid #ccc;
+  font-style: italic;
+}
+
+/* Small caps support */
+span[style*="small-caps"] {
+  font-variant: small-caps;
+}
+
+/* General cleanup */
+sup, sub {
+  font-size: 0.8em;
+  line-height: 0;
+}
+
+/* Definition lists - bold terms to match wiki rendering */
+dl > dt {
+  font-weight: bold;
+}
