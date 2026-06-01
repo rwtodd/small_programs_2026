@@ -1037,6 +1037,8 @@ class WikitextConverter:
         '&laquo;': '&#171;',
         '&raquo;': '&#187;',
         '&times;': '&#215;',
+        '&oacute;': '&#243;',
+        '&Oacute;': '&#211;',
     }
 
     def _normalize_entities(self, text: str) -> str:

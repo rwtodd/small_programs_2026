@@ -253,16 +253,6 @@ def run_stage1(
     # Discover media references from the TOC we just parsed
     all_media.update(_extract_media_names(src_text))
 
-    # Also scan any chapter files that already exist on disk (helpful for both live and offline)
-    for ch in chapter_infos:
-        ch_path = chapters_dir / (ch.page_title.replace(" ", "_") + ".wikitext")
-        if ch_path.exists():
-            try:
-                ch_text = ch_path.read_text(encoding="utf-8")
-                all_media.update(_extract_media_names(ch_text))
-            except Exception:
-                pass
-
     # --- Live download of chapter wikitext (and all referenced media) ---
     if is_live_fetch:
         base_url = creds["base_url"]  # type: ignore[index]
@@ -282,6 +272,18 @@ def run_stage1(
                         target.write_text(f"; ERROR fetching this page: {e}\n", encoding="utf-8")
                 else:
                     log.debug("Chapter already present: %s", ch.page_title)
+
+            # Now that chapter wikitext files exist (or already did), scan them all
+            # for additional media references. This is important on first runs so
+            # that images referenced *inside* chapters (not just the TOC) get downloaded.
+            for ch in chapter_infos:
+                ch_path = chapters_dir / (ch.page_title.replace(" ", "_") + ".wikitext")
+                if ch_path.exists():
+                    try:
+                        ch_text = ch_path.read_text(encoding="utf-8")
+                        all_media.update(_extract_media_names(ch_text))
+                    except Exception:
+                        pass
 
             # Download the cover image if we detected one
             if cover:

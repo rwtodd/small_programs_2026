@@ -64,7 +64,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--workdir",
         type=Path,
         default=None,
-        help="Persistent working directory for restartable stages (default: derived from book title)",
+        help="Persistent working directory for restartable stages. "
+             "Book title/author/year come from metadata.json (edit it manually if TOC header parsing fails). "
+             "Use --title/--author/--year to override and persist the change.",
     )
     parser.add_argument(
         "--toc-file",
@@ -93,6 +95,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--force",
         action="store_true",
         help="Force re-download even if files already exist in the workdir",
+    )
+    parser.add_argument(
+        "--title",
+        help="Override book title for the final EPUB (also written to metadata.json)",
+    )
+    parser.add_argument(
+        "--author",
+        help="Override book author for the final EPUB (also written to metadata.json)",
+    )
+    parser.add_argument(
+        "--year",
+        help="Override publication year for the final EPUB (also written to metadata.json)",
     )
     parser.add_argument(
         "-v",
@@ -146,8 +160,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     if 2 in stages:
         stage2.run_stage2(workdir=workdir, force=args.force)
     if 3 in stages:
-        out = stage3.run_stage3(workdir=workdir, output=Path(args.output) if args.output else None)
+        # Apply manual metadata overrides from CLI (these take precedence)
+        stage3_kwargs = {
+            "workdir": workdir,
+            "output": Path(args.output) if args.output else None,
+        }
+        if args.title:
+            stage3_kwargs["title"] = args.title
+        if args.author:
+            stage3_kwargs["author"] = args.author
+        if args.year:
+            try:
+                stage3_kwargs["year"] = int(args.year)
+            except ValueError:
+                stage3_kwargs["year"] = args.year
+
+        out = stage3.run_stage3(**stage3_kwargs)
         log.info("EPUB written: %s", out)
+
+        # If overrides were provided and we have a workdir, persist them to metadata.json
+        # so they survive future restarts.
+        if workdir and (args.title or args.author or args.year):
+            meta_path = workdir / "metadata.json"
+            if meta_path.exists():
+                try:
+                    from .models import BookMetadata
+                    meta = BookMetadata.from_json(meta_path)
+                    if args.title:
+                        meta.book_title = args.title
+                    if args.author:
+                        meta.author = args.author
+                    if args.year:
+                        meta.pub_year = args.year
+                    meta.to_json(meta_path)
+                    log.info("Updated book metadata in %s with CLI overrides", meta_path)
+                except Exception as e:
+                    log.warning("Failed to persist metadata overrides to %s: %s", meta_path, e)
 
     log.info("All requested stages complete.")
     return 0

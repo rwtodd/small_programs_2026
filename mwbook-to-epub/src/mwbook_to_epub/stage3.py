@@ -35,8 +35,13 @@ def run_stage3(
     Produce a real EPUB.
 
     Supports two modes:
-    - workdir mode (future full flow)
+    - workdir mode (full restartable flow)
     - Quick ad-hoc mode (pass explicit chapters + cover + optional images_dir)
+
+    In workdir mode, book title/author/year are taken from metadata.json
+    (the values written by Stage 1, or manually edited by the user).
+    CLI flags --title/--author/--year (when running the full tool) will
+    override the values in metadata.json.
 
     When `images_dir` is provided in ad-hoc mode, we will:
       - Scan the chapter XHTML for <img> tags
@@ -50,6 +55,14 @@ def run_stage3(
     if workdir:
         meta_path = workdir / "metadata.json"
         xhtml_dir = workdir / "xhtml"
+
+        # Load book metadata from metadata.json (this is the source of truth for title/author/etc.)
+        book_meta: BookMetadata | None = None
+        if meta_path.exists():
+            try:
+                book_meta = BookMetadata.from_json(meta_path)
+            except Exception as e:
+                log.warning("Could not load metadata.json: %s", e)
 
         if not chapters:
             if xhtml_dir.exists():
@@ -97,18 +110,26 @@ def run_stage3(
                     images_dir = candidate
 
         # Auto-discover cover from metadata if not provided
-        if cover_image is None and meta_path.exists():
-            try:
-                meta = BookMetadata.from_json(meta_path)
-                if meta.cover_image and images_dir:
-                    candidate = images_dir / meta.cover_image
-                    if candidate.exists():
-                        cover_image = candidate
-            except Exception:
-                pass
+        if cover_image is None and book_meta and book_meta.cover_image and images_dir:
+            candidate = images_dir / book_meta.cover_image
+            if candidate.exists():
+                cover_image = candidate
 
     if not chapters:
         raise ValueError("No chapters provided to Stage 3")
+
+    # In workdir mode, prefer metadata from metadata.json over the function defaults.
+    # This lets users manually set/fix title, author, year when TOC header parsing fails.
+    if workdir and book_meta:
+        if book_meta.book_title:
+            title = book_meta.book_title
+        if book_meta.author:
+            author = book_meta.author
+        if book_meta.pub_year:
+            try:
+                year = int(book_meta.pub_year)
+            except (ValueError, TypeError):
+                year = book_meta.pub_year  # rwt_epub accepts str too
 
     # Try to get cover dimensions
     cover_dims: tuple[int, int] | None = None
