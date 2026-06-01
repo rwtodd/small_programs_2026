@@ -764,7 +764,8 @@ class WikitextConverter:
 
         # Old fallback behavior (used when running without full metadata context)
         clean = strip_last_parenthetical(t.replace("_", " "))
-        slug = safe_filename(clean)
+        # Use a longer limit here because there is no numeric prefix to guarantee uniqueness
+        slug = safe_filename(clean, max_length=60)
         return f"{slug}.xhtml"
 
     # ------------------------------------------------------------------ #

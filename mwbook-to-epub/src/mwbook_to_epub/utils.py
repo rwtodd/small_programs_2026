@@ -30,12 +30,35 @@ def run_magick_identify(path: Path) -> tuple[int, int] | None:
         return None
 
 
-def safe_filename(name: str) -> str:
-    r"""Make a safe filename component (no :, /, \, etc. — good for EPUB and filesystems)."""
+def safe_filename(name: str, max_length: int = 25) -> str:
+    """
+    Produce a very safe filename component.
+
+    - Keeps only ASCII letters and digits.
+    - Replaces any other character with underscore.
+    - Collapses runs of underscores.
+    - Strips leading/trailing underscores.
+    - Truncates to `max_length` characters (default 25).
+
+    Intended for chapter XHTML filenames derived from TOC titles.
+    The numeric prefix (001_, 002_, ...) is added by the caller and guarantees
+    uniqueness even if many titles truncate to the same short slug.
+    """
     import re
-    name = re.sub(r'[:/\\?*"<>\|]', '_', name)
-    name = re.sub(r'\s+', ' ', name).strip()
-    return name.replace(' ', '_')
+    # Replace anything that is not A-Z a-z 0-9 with underscore
+    name = re.sub(r'[^A-Za-z0-9]+', '_', name)
+    # Collapse multiple underscores
+    name = re.sub(r'_+', '_', name)
+    # Strip leading/trailing underscores
+    name = name.strip('_')
+
+    # Truncate if necessary
+    if len(name) > max_length:
+        name = name[:max_length].rstrip('_')
+        if not name:
+            name = "untitled"
+
+    return name
 
 
 def convert_to_webp_if_smaller(

@@ -189,7 +189,7 @@ def run_stage1(
         else:
             clean = strip_last_parenthetical(page_title.replace("_", " "))
 
-        safe = safe_filename(clean)
+        safe = safe_filename(clean)  # defaults to 25 chars; numeric prefix guarantees uniqueness
         xhtml_name = f"{idx+1:03d}_{safe}.xhtml"
         chapter_infos.append(
             ChapterInfo(
