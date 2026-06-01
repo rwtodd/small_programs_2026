@@ -119,6 +119,9 @@ table.wikitable th {
  table.wikitable th {
     background: #333344;
   }
+  figcaption {
+    color: #888888;
+  }
 }
 
 /* Collapsible / Q&A style (from mw-collapsible) */
