@@ -1,4 +1,7 @@
 /* mwbook-to-epub default stylesheet - tuned for EPUB 3 readers */
+:root {
+  color-scheme: light dark;
+}
 
 body {
   font-family: Georgia, "Times New Roman", serif;
@@ -43,6 +46,10 @@ h3 { font-size: 1.15em; margin-top: 1em; margin-bottom: 0.4em; }
   max-width: 100%;
   height: auto;
   display: block;
+}
+
+.img-gallery > img {
+  max-width: 100%;
 }
 
 .img-center {

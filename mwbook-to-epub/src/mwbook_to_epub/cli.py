@@ -71,9 +71,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--toc-file",
         type=Path,
-        help="Local wikitext file containing the book's TOC page (for offline use). "
-             "Stage 1 will copy it into the workdir as downloads/toc.wikitext so future "
-             "runs can omit this flag.",
+        help="Local wikitext file containing the book's TOC page. "
+             "If wiki credentials are available (-c), Stage 1 will still download "
+             "chapter wikitext and images. The TOC file is copied to downloads/toc.wikitext.",
     )
     parser.add_argument(
         "--toc-page",
@@ -141,10 +141,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     log.info("Workdir: %s", workdir)
 
     creds = None
-    needs_creds = bool(args.toc_page)
-    if needs_creds:
+    do_stage1 = 1 in stages
+
+    if args.toc_page:
+        # --toc-page always requires live access → must load creds
         creds = _read_credentials(args.creds)
         log.debug("Credentials loaded for %s", creds["base_url"])
+    elif do_stage1:
+        # When running Stage 1 (even with --toc-file), try to load credentials.
+        # This allows fetching chapter wikitext + images while using a local TOC file.
+        try:
+            creds = _read_credentials(args.creds)
+            log.debug("Credentials loaded for %s (enabling chapter downloads)", creds["base_url"])
+        except SystemExit:
+            # No creds file present — fall back to fully offline mode for --toc-file
+            creds = None
+            if args.toc_file:
+                log.info("No credentials found; Stage 1 will run in offline mode (no chapter downloads).")
+            else:
+                # Re-raise if user didn't provide any TOC source at all
+                raise
 
     # Dispatch to stages (they are responsible for being restartable / incremental)
     from . import stage1, stage2, stage3

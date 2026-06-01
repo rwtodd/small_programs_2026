@@ -248,7 +248,9 @@ def run_stage1(
         )
     log.info("Found %d chapters from lists in TOC", len(chapter_infos))
 
-    is_live_fetch = toc_page is not None
+    # We can do live fetches (chapter wikitext + images) whenever we have credentials,
+    # even if the TOC itself came from a local file (--toc-file).
+    is_live_fetch = creds is not None
 
     # Discover media references from the TOC we just parsed
     all_media.update(_extract_media_names(src_text))
@@ -258,6 +260,9 @@ def run_stage1(
         base_url = creds["base_url"]  # type: ignore[index]
         username = creds["username"]  # type: ignore[index]
         password = creds["password"]  # type: ignore[index]
+
+        if toc_file and not toc_page:
+            log.info("Using local TOC file, but performing live chapter + image downloads (credentials available).")
 
         with Client.session(base_url, username, password) as client:
             for ch in chapter_infos:

@@ -414,17 +414,29 @@ class WikitextConverter:
 
     def _preprocess_cite(self, text: str) -> str:
         """
-        Limited but functional support for MediaWiki <ref> / <references>
-        (the style used in test011 and the 32 Paths book).
+        Support for MediaWiki Cite extension in two common styles:
+
+        1. Named references (original style, used in 32 Paths book and test011):
+           - <ref name="foo">content</ref> or <ref name="foo"/>
+           - Definitions collected from inside <references>...</references>
+
+        2. Anonymous inline references (used in "A Depth of Beginning"):
+           - <ref>content here</ref>  (text lives at the citation site)
+           - Triggered by a bare <references/> (self-closing) at the bottom.
+
+        Both styles produce the same <sup class="reference"> links and
+        <ol class="references"> list at the end. A given page is not expected
+        to mix the two styles.
         """
         if "<ref" not in text.lower() and "<references" not in text.lower():
             return text
 
+        # --- Named reference support (old style) ---
         ref_defs: dict[str, str] = {}
-        ref_order: list[str] = []
+        ref_order: list[str] = []   # for named refs from <references> block
 
-        def extract_defs(m):
-            inner = m.group(1)
+        def extract_named_defs(m):
+            inner = m.group(1) or ""
             for rm in re.finditer(r'<ref\s+name=["\']([^"\']+)["\']\s*>(.*?)</ref>', inner, re.I | re.DOTALL):
                 name = rm.group(1).strip()
                 content = rm.group(2).strip()
@@ -433,23 +445,87 @@ class WikitextConverter:
                     ref_order.append(name)
             return ""
 
-        text = re.sub(r'<references[^>]*>(.*?)</references\s*>', extract_defs, text, flags=re.I | re.DOTALL)
+        text = re.sub(r'<references[^>]*>(.*?)</references\s*>', extract_named_defs, text, flags=re.I | re.DOTALL)
 
-        cite_num = {}
+        # --- Anonymous inline ref support (new style) ---
+        # Collect <ref>content</ref> that have no name= attribute.
+        anon_contents: list[str] = []
+        anon_id_map: dict[int, str] = {}   # occurrence index -> synthetic name
+
+        def collect_anonymous_refs(m):
+            content = m.group(1).strip()
+            idx = len(anon_contents)
+            anon_contents.append(content)
+            synthetic_name = f"ref{idx + 1}"
+            anon_id_map[idx] = synthetic_name
+            # Leave a marker so we can replace it in the next step
+            return f'__ANON_REF_{idx}__'
+
+        text = re.sub(r'<ref\s*>(.*?)</ref>', collect_anonymous_refs, text, flags=re.I | re.DOTALL)
+
+        # --- Replace all reference call sites with superscript links ---
+        cite_num: dict[str, int] = {}
         counter = 0
 
-        def replace_ref(m):
+        def make_sup(name: str, is_anon: bool = False) -> str:
             nonlocal counter
-            name = m.group(1).strip()
             if name not in cite_num:
                 counter += 1
                 cite_num[name] = counter
             num = cite_num[name]
-            return f'<sup id="cite_ref-{name}_{num}-0" class="reference"><a href="#cite_note-{name}-{num}">[{num}]</a></sup>'
+            if is_anon:
+                # Use simpler ids for anonymous refs
+                return f'<sup id="cite_ref-{name}-{num}" class="reference"><a href="#cite_note-{name}-{num}">[{num}]</a></sup>'
+            else:
+                return f'<sup id="cite_ref-{name}_{num}-0" class="reference"><a href="#cite_note-{name}-{num}">[{num}]</a></sup>'
 
-        text = re.sub(r'<ref\s+name=["\']([^"\']+)["\']\s*/?\s*>', replace_ref, text, flags=re.I)
+        def replace_named_ref(m):
+            name = m.group(1).strip()
+            return make_sup(name, is_anon=False)
 
-        if ref_defs:
+        text = re.sub(r'<ref\s+name=["\']([^"\']+)["\']\s*/?\s*>', replace_named_ref, text, flags=re.I)
+
+        # Now turn the anonymous markers into real sups
+        def replace_anon_marker(m):
+            idx = int(m.group(1))
+            synthetic_name = anon_id_map.get(idx, f"ref{idx+1}")
+            return make_sup(synthetic_name, is_anon=True)
+
+        text = re.sub(r'__ANON_REF_(\d+)__', replace_anon_marker, text)
+
+        # --- Emit the references list ---
+        # Priority: if we saw any anonymous refs, emit them when we see <references/>
+        # Otherwise fall back to the classic named-defs-in-block behavior.
+
+        if anon_contents:
+            # New anonymous style: look for bare <references/>
+            def emit_anon_list(m):
+                notes = []
+                has_notes_heading = (
+                    re.search(r'<h2[^>]*>\s*Notes\s*</h2>', text, re.I) or
+                    re.search(r'^==\s*Notes\s*==', text, re.M | re.I)
+                )
+                if not has_notes_heading:
+                    notes.append('<h2>  Notes  </h2>')
+                notes.append('<ol class="references">')
+                for idx, content in enumerate(anon_contents):
+                    num = idx + 1
+                    synthetic_name = anon_id_map.get(idx, f"ref{num}")
+                    try:
+                        rendered = "".join(self._render(n) for n in mwp.parse(content).nodes)
+                    except Exception:
+                        rendered = html.escape(content)
+                    notes.append(
+                        f'<li id="cite_note-{synthetic_name}-{num}">'
+                        f'<a href="#cite_ref-{synthetic_name}-{num}">↑</a> {rendered}</li>'
+                    )
+                notes.append('</ol>')
+                return "\n".join(notes)
+
+            text = re.sub(r'<references\s*/\s*>', emit_anon_list, text, flags=re.I)
+
+        elif ref_defs:
+            # Classic named style (from <references> block)
             notes = []
             has_notes_heading = (
                 re.search(r'<h2[^>]*>\s*Notes\s*</h2>', text, re.I) or
@@ -1039,6 +1115,11 @@ class WikitextConverter:
         '&times;': '&#215;',
         '&oacute;': '&#243;',
         '&Oacute;': '&#211;',
+        # Curly quotes (very common in imported wikitext)
+        '&lsquo;': '&#8216;',
+        '&rsquo;': '&#8217;',
+        '&ldquo;': '&#8220;',
+        '&rdquo;': '&#8221;',
     }
 
     def _normalize_entities(self, text: str) -> str:
