@@ -115,6 +115,12 @@ table.wikitable th {
   font-weight: bold;
 }
 
+@media (prefers-color-scheme: dark) {
+ table.wikitable th {
+    background: #333344;
+  }
+}
+
 /* Collapsible / Q&A style (from mw-collapsible) */
 .rwt-qa {
   margin-bottom: 0.8em;
