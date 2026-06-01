@@ -1397,10 +1397,18 @@ def run_stage2(*, workdir: Path, force: bool = False) -> None:
     page_to_xhtml = {ch.page_title: ch.xhtml_filename for ch in meta.chapters}
     page_to_display = {ch.page_title: ch.display_title for ch in meta.chapters}
 
+    # Build the map from original wiki image name → the chosen file (webp or original)
+    # that stage 2 should emit in <img src> and <figure> markup.
+    image_map = {
+        orig_name: info.chosen_local
+        for orig_name, info in meta.images.items()
+    }
+
     ctx = ConversionContext(
         book_pages=set(page_to_xhtml.keys()),
         page_to_xhtml=page_to_xhtml,
         page_to_display=page_to_display,
+        image_map=image_map,
         images_root=images_root,
         workdir=workdir,
         emit_title_h1=True,

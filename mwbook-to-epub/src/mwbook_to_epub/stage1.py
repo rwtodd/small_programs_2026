@@ -17,7 +17,12 @@ from rwt_wikiapi import Client
 
 from .models import BookMetadata, ChapterInfo, ImageInfo
 from .toc import ensure_toc_json
-from .utils import strip_last_parenthetical, safe_filename, run_magick_identify
+from .utils import (
+    convert_to_webp_if_smaller,
+    strip_last_parenthetical,
+    safe_filename,
+    run_magick_identify,
+)
 
 log = logging.getLogger(__name__)
 
@@ -323,20 +328,60 @@ def run_stage1(
             # to keep the existing canonical copy (user may have edited it), but we log.
             log.debug("Using existing canonical TOC %s (external source %s not re-copied without --force)", toc_dest, toc_file)
 
-    # Build ImageInfo entries for everything we downloaded in this run
+    # Build ImageInfo entries, running WEBP size-comparison conversion where beneficial.
+    # Original files are always left untouched on disk. The choice (original vs .webp)
+    # is recorded in chosen_local so the user can override it later by editing metadata.json.
     images_dict: dict[str, ImageInfo] = {}
     for name in sorted(all_media):
-        images_dict[name] = ImageInfo(
-            original_name=name,
-            chosen_local=name,
-            media_type="image/jpeg" if name.lower().endswith(('.jpg', '.jpeg')) else "image/png",
-        )
+        img_path = images_dir / name
+        if img_path.exists():
+            chosen_name, converted, osz, fsz, w, h = convert_to_webp_if_smaller(img_path)
+            mt = "image/webp" if chosen_name.lower().endswith(".webp") else (
+                "image/jpeg" if name.lower().endswith(('.jpg', '.jpeg')) else "image/png"
+            )
+            images_dict[name] = ImageInfo(
+                original_name=name,
+                chosen_local=chosen_name,
+                media_type=mt,
+                was_converted=converted,
+                orig_size=osz,
+                final_size=fsz,
+            )
+        else:
+            # Record the expectation even if file not present yet (offline planning)
+            mt = "image/jpeg" if name.lower().endswith(('.jpg', '.jpeg')) else "image/png"
+            images_dict[name] = ImageInfo(
+                original_name=name,
+                chosen_local=name,
+                media_type=mt,
+            )
+
     if cover and cover not in images_dict:
-        images_dict[cover] = ImageInfo(
-            original_name=cover,
-            chosen_local=cover,
-            media_type="image/jpeg" if cover.lower().endswith(('.jpg', '.jpeg')) else "image/png",
-        )
+        img_path = images_dir / cover
+        if img_path.exists():
+            chosen_name, converted, osz, fsz, w, h = convert_to_webp_if_smaller(img_path)
+            mt = "image/webp" if chosen_name.lower().endswith(".webp") else (
+                "image/jpeg" if cover.lower().endswith(('.jpg', '.jpeg')) else "image/png"
+            )
+            images_dict[cover] = ImageInfo(
+                original_name=cover,
+                chosen_local=chosen_name,
+                media_type=mt,
+                was_converted=converted,
+                orig_size=osz,
+                final_size=fsz,
+            )
+        else:
+            images_dict[cover] = ImageInfo(
+                original_name=cover,
+                chosen_local=cover,
+                media_type="image/jpeg" if cover.lower().endswith(('.jpg', '.jpeg')) else "image/png",
+            )
+
+    # Use the chosen (possibly WEBP-optimized) version for the cover if we processed it.
+    cover_for_metadata = cover
+    if cover and cover in images_dict:
+        cover_for_metadata = images_dict[cover].chosen_local
 
     meta = BookMetadata(
         book_title=header.get("title", "Untitled Book"),
@@ -344,7 +389,7 @@ def run_stage1(
         pub_year=header.get("date", ""),
         toc_page_title=header.get("title"),
         chapters=chapter_infos,
-        cover_image=cover,
+        cover_image=cover_for_metadata,
         images=images_dict,
         created_from=str(toc_file),
     )
@@ -356,6 +401,16 @@ def run_stage1(
         log.info("You can manually change the cover later by editing the 'cover_image' field in metadata.json")
     else:
         log.info("After editing 'cover_image' in metadata.json, re-run with --stages 3 (or --start-from 3)")
+
+    # Inform user about the WEBP choice override mechanism
+    converted_count = sum(1 for i in images_dict.values() if i.was_converted)
+    if converted_count > 0:
+        log.info(
+            "%d images were converted to WEBP (smaller version kept alongside original). "
+            "To force use of any original file, edit its 'chosen_local' in metadata.json "
+            "back to the .jpg/.png name and re-run from stage 2.",
+            converted_count,
+        )
 
     # --- Generate editable TOC JSON (for rwt_epub) --------------------------------
     # Uses the canonical downloads/toc.wikitext we just materialized.
