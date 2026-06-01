@@ -141,6 +141,8 @@ def run_stage3(
             if cover_dims:
                 w.add_image_content(cover_fname, cover_bytes, is_cover=True, img_dims=cover_dims)
                 w.add_fullpage_pic("cover-page", cover_fname)
+                w.add_toc_entry("Cover", "cover-page.xhtml", level=1)
+                log.info("Added Cover entry to the top of the TOC")
             else:
                 w.add_image_content(cover_fname, cover_bytes, is_cover=True)
 
