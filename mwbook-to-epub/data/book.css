@@ -111,13 +111,14 @@ table.wikitable td {
 }
 
 table.wikitable th {
-  background: #f0f0f0;
+  background-color: #f0f0f0;
   font-weight: bold;
 }
 
 @media (prefers-color-scheme: dark) {
  table.wikitable th {
-    background: #333344;
+    background-color: #333344;
+    color: #E03A3E;
   }
   figcaption {
     color: #aaaaaa;
