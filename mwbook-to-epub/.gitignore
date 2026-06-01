@@ -158,6 +158,7 @@ mwbook_work/
 */mwbook_work/
 */*_work/
 tmp/
+workdirs/
 
 # Credentials (never commit real ones)
 wiki_creds.json
