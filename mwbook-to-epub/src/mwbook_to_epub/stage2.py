@@ -393,6 +393,7 @@ class WikitextConverter:
             params_str = m.group(2)
 
             params = {}
+            pos_idx = 1
             for p in re.split(r'\s*\|\s*', params_str):
                 if not p:
                     continue
@@ -400,8 +401,8 @@ class WikitextConverter:
                     k, v = p.split('=', 1)
                     params[k.strip().lower()] = v.strip()
                 else:
-                    if '1' not in params and not params:
-                        params['1'] = p.strip()
+                    params[str(pos_idx)] = p.strip()
+                    pos_idx += 1
 
             try:
                 rendered = render_template(name, params, ctx=self.ctx)
