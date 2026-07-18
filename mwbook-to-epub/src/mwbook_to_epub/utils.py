@@ -61,6 +61,28 @@ def safe_filename(name: str, max_length: int = 25) -> str:
     return name
 
 
+def get_image_media_type(filename: str) -> str:
+    """Return the correct MIME media type for an image file based on its extension.
+
+    Supports common formats including SVG (which must not be rasterized).
+    Falls back to octet-stream for unknown types.
+    """
+    ext = Path(filename).suffix.lower().lstrip(".")
+    if ext in ("jpg", "jpeg"):
+        return "image/jpeg"
+    if ext == "png":
+        return "image/png"
+    if ext == "svg":
+        return "image/svg+xml"
+    if ext == "gif":
+        return "image/gif"
+    if ext == "webp":
+        return "image/webp"
+    if ext in ("bmp", "tiff", "tif"):
+        return "image/" + ext
+    return "application/octet-stream"
+
+
 def convert_to_webp_if_smaller(
     original_path: Path,
     *,
@@ -88,6 +110,12 @@ def convert_to_webp_if_smaller(
 
     is_already_webp = suffix == ".webp"
     orig_size = original_path.stat().st_size
+
+    # Only attempt WEBP optimization for actual raster image formats.
+    # Vector formats like SVG must be left alone (they are not rasterized).
+    raster_exts = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif")
+    if suffix not in raster_exts:
+        return original_path.name, False, orig_size, orig_size, None, None
 
     try:
         # Get dimensions

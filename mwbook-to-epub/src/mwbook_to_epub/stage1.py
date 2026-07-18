@@ -19,6 +19,7 @@ from .models import BookMetadata, ChapterInfo, ImageInfo
 from .toc import ensure_toc_json
 from .utils import (
     convert_to_webp_if_smaller,
+    get_image_media_type,
     strip_last_parenthetical,
     safe_filename,
     run_magick_identify,
@@ -343,9 +344,11 @@ def run_stage1(
         img_path = images_dir / name
         if img_path.exists():
             chosen_name, converted, osz, fsz, w, h = convert_to_webp_if_smaller(img_path)
-            mt = "image/webp" if chosen_name.lower().endswith(".webp") else (
-                "image/jpeg" if name.lower().endswith(('.jpg', '.jpeg')) else "image/png"
-            )
+            # If conversion happened we use the chosen_name's type, otherwise derive from original name.
+            if chosen_name.lower().endswith(".webp"):
+                mt = "image/webp"
+            else:
+                mt = get_image_media_type(name)
             images_dict[name] = ImageInfo(
                 original_name=name,
                 chosen_local=chosen_name,
@@ -356,7 +359,7 @@ def run_stage1(
             )
         else:
             # Record the expectation even if file not present yet (offline planning)
-            mt = "image/jpeg" if name.lower().endswith(('.jpg', '.jpeg')) else "image/png"
+            mt = get_image_media_type(name)
             images_dict[name] = ImageInfo(
                 original_name=name,
                 chosen_local=name,
@@ -367,9 +370,10 @@ def run_stage1(
         img_path = images_dir / cover
         if img_path.exists():
             chosen_name, converted, osz, fsz, w, h = convert_to_webp_if_smaller(img_path)
-            mt = "image/webp" if chosen_name.lower().endswith(".webp") else (
-                "image/jpeg" if cover.lower().endswith(('.jpg', '.jpeg')) else "image/png"
-            )
+            if chosen_name.lower().endswith(".webp"):
+                mt = "image/webp"
+            else:
+                mt = get_image_media_type(cover)
             images_dict[cover] = ImageInfo(
                 original_name=cover,
                 chosen_local=chosen_name,
@@ -382,7 +386,7 @@ def run_stage1(
             images_dict[cover] = ImageInfo(
                 original_name=cover,
                 chosen_local=cover,
-                media_type="image/jpeg" if cover.lower().endswith(('.jpg', '.jpeg')) else "image/png",
+                media_type=get_image_media_type(cover),
             )
 
     # Use the chosen (possibly WEBP-optimized) version for the cover if we processed it.

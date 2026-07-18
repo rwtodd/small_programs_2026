@@ -1,11 +1,13 @@
 # Bulk Rename Tool
 
+(ruby version -- there is also a .ps1 script here and a golang version in a subdirectory)
+
 This is a tool that:
 - Reads a list of files on stdin
 - Applies regex-replacements on each file name (not the directory portion)
 - Interactively prompts the user to confirm each change
 - Renames the files
-- Note: does not move the files, only renames them in place, leaving the directory names alone
+- Note: does not move the files, only renames them in place, leaving the directory names and extensions alone
 
 ## Usage Examples:
 ```bash
@@ -13,10 +15,10 @@ This is a tool that:
 $ find . -name '*.mp4' | bulk-rename '[-_]+' '_'
 
 # Can have multiple regex-replacements
-$ find . -name '*.mp4' | bulk-rename '[-_]+' '_'  '\.mp4$' ''
+$ find . -name '*.mp4' | bulk-rename '[-_]+' '_'  '33$' ''
 
 # Can separate filenames by \0 instead of \n
-$ find . -name '*.mp4' -print0 | bulk-rename -0 '[-_]+' '_'  '\.mp4$' ''
+$ find . -name '*.mp4' -print0 | bulk-rename -0 '[-_]+' '_'  '33$' ''
 
 # Can automatically replace strings of non-alphanumeric characters with a single underscore (applies _after_ all user-given regex-replacements)
 $ find . -name '*.mp4' | bulk-rename -alpha 'Ex.ra' ''
@@ -34,7 +36,7 @@ $ find . -name '*.mp4' | bulk-rename -truncate 10 'Ex.ra' ''  # Truncate to 10 c
 - `-num <n>`: Automatically place an incrementing `<n>`-digit number at the front of each filename (applies _after_ all user-given regex-replacements)
 - `-truncate <n>`: Truncate the filename to a fixed length (applies _after_ all user-given regex-replacements) (length does _not_ include the extension or directory portion)
 - `-y`: Do not prompt the user to confirm each change
-- `<regex>,<replacement>`: Apply the regex-replacement to each filename (optional, can be specified multiple times)
+- `<regex>` `<replacement>`: Apply the regex-replacement to each filename (optional, can be specified multiple times)
 
 ## Confirmation Workflow:
 - The tool prints the old and new filename to stderr
@@ -47,6 +49,16 @@ $ find . -name '*.mp4' | bulk-rename -truncate 10 'Ex.ra' ''  # Truncate to 10 c
 ## Exit Status:
 - 0: Success
 - 1: Error
+
+## Ruby Version Installation
+
+```bash
+# 1. Package the code into a .gem file
+gem build bulk_rename.gemspec
+
+# 2. Install it to your system's gem folder
+gem install bulk_rename-0.1.0.gem
+```
 
 ## License:
 MIT

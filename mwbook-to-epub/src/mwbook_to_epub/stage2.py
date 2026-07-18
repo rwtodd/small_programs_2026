@@ -50,6 +50,7 @@ class WikitextConverter:
 
     def __init__(self, ctx: ConversionContext | None = None):
         self.ctx = ctx or ConversionContext()
+        self._uses_rwt_qa = False  # set during render if we emit any rwt-qa collapsible divs
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -61,6 +62,8 @@ class WikitextConverter:
         Returns the inner content suitable for <body>...</body> (or for
         rwt_epub's add_xhtml_body).
         """
+        self._uses_rwt_qa = False
+
         # 1. Strip junk (arrow navigation paragraphs, [[Category:...]] lines, Generic Nav templates)
         #    while the wikitext still contains the raw markup these regexes look for.
         #    MUST run before _pre_expand_templates_and_links, because link simplification
@@ -325,6 +328,19 @@ class WikitextConverter:
         # immediately after <h1> (or other headings) when the next content is a block.
         body = re.sub(r'\n{3,}', '\n\n', body)
         body = re.sub(r'(</h[1-6]>)\n\n(<[a-z/])', r'\1\n\2', body, flags=re.IGNORECASE)
+
+        # If this chapter used any rwt-qa collapsible sections, inject the tiny
+        # show/hide script into the body fragment (it will end up in <body> of
+        # the wrapped XHTML). We only do this for chapters that actually need it.
+        if getattr(self, '_uses_rwt_qa', False):
+            script = '''<script>
+function rwtShowHide(element) {
+    element.classList.toggle('rwtShown');
+}
+</script>
+'''
+            body = script + body
+            self._uses_rwt_qa = False
 
         return body
 
@@ -834,6 +850,7 @@ class WikitextConverter:
                 cls = ""
         if "mw-collapsible" in cls:
             # Turn it into the rwt-qa pattern the user likes for EPUB
+            self._uses_rwt_qa = True
             inner = "".join(self._render(n) for n in getattr(node, "contents", []))
             return f'<div class="rwt-qa" onclick="rwtShowHide(this)">{inner}</div>'
 
@@ -925,6 +942,36 @@ class WikitextConverter:
         # Skip obvious infobox/nav tables at the top of pages
         if "infobox" in cls.lower():
             return ""
+
+        # Handle 1-row, 1-column "mw-collapsible" tables by converting to rwt-qa div
+        # (as specified for hint boxes etc. in KQ3 and similar books). Multi-cell
+        # collapsible tables are left as normal tables.
+        if "mw-collapsible" in cls.lower():
+            looks_like_pipe_table = (
+                "wikitable" in cls.lower()
+                or re.search(r'^\s*\|[-}]', table_source, re.MULTILINE)
+                or "||" in table_source[:200]
+            )
+            if looks_like_pipe_table:
+                table_html = self._render_pipe_table(table_source, base_attrs=attrs)
+            else:
+                raw_inner = "".join(self._render(n) for n in getattr(node, "contents", []))
+                table_html = f"<table{attrs}>{raw_inner}</table>"
+
+            # Count cells in the rendered output (only data cells, not captions)
+            import re as _re
+            cells = _re.findall(r'<t[dh]\b[^>]*>.*?</t[dh]>', table_html, _re.DOTALL | _re.IGNORECASE)
+            if len(cells) <= 1:
+                # 1-cell (or empty) collapsible -> rwt-qa interactive div
+                self._uses_rwt_qa = True
+                cell_match = _re.search(r'<t[dh]\b[^>]*>(.*?)</t[dh]>', table_html, _re.DOTALL | _re.IGNORECASE)
+                inner = cell_match.group(1).strip() if cell_match else table_html
+                # Per the documented conversion, wrap the (table cell) content in <p>
+                # so that the existing .rwt-qa > p CSS rules apply.
+                return f'<div class="rwt-qa" onclick="rwtShowHide(this)"><p>{inner}</p></div>'
+            else:
+                # Multi-cell collapsible table: return as-is (normal table)
+                return table_html
 
         # If this looks like a classic wikitext pipe table, use the good parser.
         # (The opening "{|" line is often absorbed into the Tag attributes,

@@ -96,7 +96,7 @@ In all cases, when there are captions, produce html to put a caption under the i
 
 ## Collapsable Tables
 
-Some files have tables with "collapsible" class added, to hide/show content.  Here is how I convert those to EPUB when I last did that manually:
+Some files have 1-row, 1-column tables with "collapsible" class added, to hide/show content.  Here is how I convert those to EPUB when I last did that manually:
 
 Use CSS like this:
 
@@ -126,7 +126,7 @@ Use CSS like this:
 
 … and use it like this:
 
-    <div class="rwt-qa" onclick="rwtShowHide(this)"><p>hello</p></div>
+    <div class="rwt-qa" onclick="rwtShowHide(this)"><p>The content of the table cell goes here.</p></div>
 
 
 ## Templates to Process
